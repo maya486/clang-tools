@@ -14,76 +14,53 @@ using namespace llvm;
 using namespace clang;
 using namespace clang::ast_matchers;
 
-// DeclarationMatcher UnionMatcher =
-// recordDecl(isUnion(), isDefinition(), hasParent(declStmt())).bind("targetUnion");
-
-// class UnionChecker : public MatchFinder::MatchCallback {
-// public:
-// void run(const MatchFinder::MatchResult &Result) override {
-// ASTContext &Ctx = *Result.Context;
-// const RecordDecl *RD = Result.Nodes.getNodeAs<RecordDecl>("targetUnion");
-// if (!RD || !RD->isUnion())
-// return;
-
-// std::vector<const FieldDecl *> fields;
-// const FieldDecl *float_field = nullptr;
-// const FieldDecl *int_field = nullptr;
-// uint64_t float_width = 0;
-// uint64_t int_width = 0;
-// int num_fields = 0;
-
-// for (const FieldDecl *FD : RD->fields()) {
-// num_fields++;
-// QualType QT = FD->getType();
-// QualType canon = Ctx.getCanonicalType(QT.getUnqualifiedType());
-// if (canon->isSpecificBuiltinType(BuiltinType::Float)) {
-// float_field = FD;
-// float_width = Ctx.getTypeSize(canon);
-//} else if (canon->isIntegerType()) {
-// int_field = FD;
-// int_width = Ctx.getTypeSize(canon);
-//}
-//}
-// if (num_fields != 2 || int_width != float_width)
-// return;
-// llvm::outs() << "Found candidate union with width " << int_width << "\n";
-//}
-//};
-
 DeclarationMatcher FunctionMatcher = functionDecl(isDefinition()).bind("funcDecl");
 
 static bool isIntFloatSizedTwoFieldUnion(const RecordDecl *RD, ASTContext &Ctx,
                                          const FieldDecl *&out_int_field,
                                          const FieldDecl *&out_float_field) {
-    if (!RD || !RD->isUnion() || !RD->isCompleteDefinition())
+    llvm::outs() << "[Debug] Checking Union\n";
+    if (!RD || !RD->isUnion() || !RD->isCompleteDefinition()) {
+        llvm::outs() << "[Debug] Union is not complete\n";
         return false;
+    }
 
     const FieldDecl *int_field = nullptr;
     const FieldDecl *float_field = nullptr;
     uint64_t int_width = 0, float_width = 0;
     int num_fields = 0;
+    llvm::outs() << "[Debug] Union a\n";
 
     for (const FieldDecl *FD : RD->fields()) {
         ++num_fields;
         QualType QT = FD->getType();
         QualType canon = Ctx.getCanonicalType(QT.getUnqualifiedType());
-        if (canon->isSpecificBuiltinType(BuiltinType::Float)) {
+        //if (canon->isSpecificBuiltinType(BuiltinType::Float)) {
+        if (canon->isFloatingType()) {
             float_field = FD;
             float_width = Ctx.getTypeSize(canon);
         } else if (canon->isIntegerType()) {
             int_field = FD;
             int_width = Ctx.getTypeSize(canon);
         } else {
+            llvm::outs() << "[Debug] Union has invalid type\n";
             return false;
         }
     }
 
-    if (num_fields != 2 || int_field == nullptr || float_field == nullptr)
-        return false;
+    llvm::outs() << "[Debug] Union b\n";
 
-    if (int_width != float_width)
+    if (num_fields != 2 || int_field == nullptr || float_field == nullptr) {
+        llvm::outs() << "[Debug] Union does not have 2 fields, 1 int, 1 float\n";
         return false;
+    }
 
+    if (int_width != float_width) {
+        llvm::outs() << "[Debug] Union does not have int and float field same width\n";
+        return false;
+    }
+
+    llvm::outs() << "[Debug] Union c\n";
     out_int_field = int_field;
     out_float_field = float_field;
     return true;
@@ -102,6 +79,14 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
     explicit MemberAccessVisitor(ASTContext &Ctx) : Ctx(Ctx) {}
 
     bool VisitMemberExpr(MemberExpr *ME) {
+        //const Expr *MEexpr = ME; // your MemberExpr*
+        //SourceRange range = MEexpr->getSourceRange();
+
+        //std::string text = Lexer::getSourceText(CharSourceRange::getTokenRange(range),
+                                                //Ctx.getSourceManager(), Ctx.getLangOpts())
+                               //.str();
+
+        //llvm::outs() << "[Debug] MemberExpr: " << text << "\n";
         const FieldDecl *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
         if (!FD)
             return true;
@@ -127,8 +112,10 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
             llvm::outs() << "(anonymous)\n";
 
         const FieldDecl *int_field = nullptr, *float_field = nullptr;
-        if (!isIntFloatSizedTwoFieldUnion(parentRD, Ctx, int_field, float_field))
+        if (!isIntFloatSizedTwoFieldUnion(parentRD, Ctx, int_field, float_field)) {
+            llvm::outs() << "[Debug] Union failed int/float sized check\n";
             return true;
+        }
 
         llvm::outs() << "[Debug] Union passed int/float sized check\n";
 
@@ -226,12 +213,12 @@ std::string generateUnionConversionFunction(QualType srcType, QualType dstType, 
         return "";
 
     std::string srcC, dstC;
-    srcC = (srcType->isFloatingType())
-               ? ((srcSize == 32) ? "float" : "double")
-               : (srcType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(srcSize) + "_t";
-    dstC = (dstType->isFloatingType())
-               ? ((dstSize == 32) ? "float" : "double")
-               : (dstType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(dstSize) + "_t";
+    srcC = (srcType->isFloatingType()) ? ((srcSize == 32) ? "float" : "double")
+                                       : (srcType->isUnsignedIntegerType() ? "uint" : "int") +
+                                             std::to_string(srcSize) + "_t";
+    dstC = (dstType->isFloatingType()) ? ((dstSize == 32) ? "float" : "double")
+                                       : (dstType->isUnsignedIntegerType() ? "uint" : "int") +
+                                             std::to_string(dstSize) + "_t";
 
     std::string code;
     code += dstC + " " + funcName + "(" + srcC + " x) {\n";
@@ -286,7 +273,7 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             const MemberExpr *writeExpr = nullptr;
             const MemberExpr *readExpr = nullptr;
             const BinaryOperator *assignStmt = nullptr;
-            const ReturnStmt *retStmt = nullptr;
+            // const ReturnStmt *retStmt = nullptr;
 
             for (const auto &a : seq) {
                 auto parents = Ctx.getParents(*a.expr);
@@ -299,8 +286,8 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
                 } else {
                     ++reads;
                     readExpr = a.expr;
-                    if (!parents.empty())
-                        retStmt = findEnclosingStmt<ReturnStmt>(a.expr, Ctx);
+                    // if (!parents.empty())
+                    // retStmt = findEnclosingStmt<ReturnStmt>(a.expr, Ctx);
                     // retStmt = dyn_cast_or_null<ReturnStmt>(parents[0].get<Stmt>());
                 }
             }
@@ -318,21 +305,23 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             else
                 llvm::outs() << "[Debug] Assignment stmt: <null>\n";
 
-            if (retStmt)
-                llvm::outs() << "[Debug] Return stmt: "
-                             << Lexer::getSourceText(
-                                    CharSourceRange::getTokenRange(retStmt->getSourceRange()),
-                                    Ctx.getSourceManager(), Ctx.getLangOpts())
-                             << "\n";
-            else
-                llvm::outs() << "[Debug] Return stmt: <null>\n";
+            // if (retStmt)
+            // llvm::outs() << "[Debug] Return stmt: "
+            //<< Lexer::getSourceText(
+            // CharSourceRange::getTokenRange(retStmt->getSourceRange()),
+            // Ctx.getSourceManager(), Ctx.getLangOpts())
+            //<< "\n";
+            // else
+            // llvm::outs() << "[Debug] Return stmt: <null>\n";
 
-            bool ok = (writes == 1 && reads == 1 && assignStmt && retStmt);
+            // bool ok = (writes == 1 && reads == 1 && assignStmt && retStmt);
+            bool ok = (writes == 1 && reads == 1 && assignStmt);
             if (!ok)
                 continue;
 
-            const FieldDecl *srcField = llvm::dyn_cast<FieldDecl>(writeExpr->getMemberDecl()); // LHS
-            const FieldDecl *dstField = llvm::dyn_cast<FieldDecl>(readExpr->getMemberDecl());  // RHS
+            const FieldDecl *srcField =
+                llvm::dyn_cast<FieldDecl>(writeExpr->getMemberDecl());                        // LHS
+            const FieldDecl *dstField = llvm::dyn_cast<FieldDecl>(readExpr->getMemberDecl()); // RHS
 
             QualType srcType = srcField->getType();
             QualType dstType = dstField->getType();
@@ -341,10 +330,29 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             std::string funcCode = generateUnionConversionFunction(srcType, dstType, Ctx);
 
             if (!funcName.empty() && !funcCode.empty()) {
-                // Insert helper function at the top of file
-                FileID fid = Ctx.getSourceManager().getMainFileID();
-                SourceLocation fileStart = Ctx.getSourceManager().getLocForStartOfFile(fid);
-                TheRewriter.InsertTextBefore(fileStart, funcCode + "\n");
+                // Insert new conversion method just above this method
+                SourceLocation funcInsertLoc = FD->getSourceRange().getBegin();
+                TheRewriter.InsertTextBefore(funcInsertLoc, funcCode + "\n");
+
+                // Remove union declaration
+                // TheRewriter.RemoveText(VD->getSourceRange());
+                // SourceLocation unionStart = VD->getBeginLoc();
+                // SourceLocation unionEnd = Lexer::getLocForEndOfToken(
+                // VD->getEndLoc(), 0, Ctx.getSourceManager(), Ctx.getLangOpts());
+                // TheRewriter.RemoveText(CharSourceRange::getCharRange(unionStart, unionEnd));
+                SourceRange unionRange = VD->getSourceRange();
+                unionRange.setEnd(Lexer::getLocForEndOfToken(
+                    unionRange.getEnd(), 0, Ctx.getSourceManager(), Ctx.getLangOpts()));
+                TheRewriter.RemoveText(unionRange);
+
+                // Remove write to union
+                // TheRewriter.RemoveText(assignStmt->getSourceRange());
+                SourceRange assignRange = assignStmt->getSourceRange();
+                assignRange.setEnd(Lexer::getLocForEndOfToken(
+                    assignRange.getEnd(), 0, Ctx.getSourceManager(), Ctx.getLangOpts()));
+                TheRewriter.RemoveText(assignRange);
+
+                // Remove the read out of the union (and replace with new method call)
 
                 // Get RHS text of write assignment: in.flt = flt gets "flt"
                 const Expr *rhs = assignStmt->getRHS()->IgnoreParenImpCasts();
@@ -354,20 +362,20 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
                                          Ctx.getSourceManager(), Ctx.getLangOpts())
                         .str();
 
-                // Determine full block range: VarDecl -> assign -> return
-                // SourceManager &SM = Ctx.getSourceManager();
-                SourceLocation startLoc = VD->getSourceRange().getBegin();
-                // SourceLocation endLoc = Lexer::getLocForEndOfToken(
-                // retStmt->getSourceRange().getEnd(), 0, SM, Ctx.getLangOpts());
-                SourceLocation endLoc = Lexer::getLocForEndOfToken(
-                    retStmt->getEndLoc(), 0, Ctx.getSourceManager(), Ctx.getLangOpts());
-                // CharSourceRange fullRange = CharSourceRange::getCharRange(startLoc,
-                // endLoc.getLocWithOffset(1));
-                CharSourceRange fullRange = CharSourceRange::getCharRange(startLoc, endLoc);
+                // Get the read location to replace:
+                SourceLocation readStart = readExpr->getSourceRange().getBegin();
+                SourceLocation readEnd =
+                    Lexer::getLocForEndOfToken(readExpr->getSourceRange().getEnd(), 0,
+                                               Ctx.getSourceManager(), Ctx.getLangOpts());
 
-                // std::string newCode = "return tenjin_u32_to_f32(" + rhsText + ")";
-                std::string newCode = "return " + funcName + "(" + rhsText + ")";
-                TheRewriter.ReplaceText(fullRange, newCode);
+                // SourceLocation startLoc = VD->getSourceRange().getBegin();
+                // SourceLocation endLoc = Lexer::getLocForEndOfToken(
+                // retStmt->getEndLoc(), 0, Ctx.getSourceManager(), Ctx.getLangOpts());
+                // CharSourceRange fullRange = CharSourceRange::getCharRange(startLoc, endLoc);
+
+                std::string newText = funcName + "(" + rhsText + ")";
+                // TheRewriter.ReplaceText(retStmt->getSourceRange(), newReturn);
+                TheRewriter.ReplaceText(CharSourceRange::getCharRange(readStart, readEnd), newText);
 
                 llvm::outs() << "Rewrote union pun in function '" << FD->getNameAsString()
                              << "' using " << funcName << "\n";

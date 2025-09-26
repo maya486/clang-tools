@@ -1,11 +1,19 @@
 [Debug] Traversing Function Body for union accesses
 [Debug] Visiting MemberExpr: num
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
 [Debug] Union passed int/float sized check
 [Debug] Owner variable: out
 [Debug] Access type: write
 [Debug] Visiting MemberExpr: flt
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
 [Debug] Union passed int/float sized check
 [Debug] Owner variable: out
 [Debug] Access type: read
@@ -17,19 +25,12 @@
     Field: flt | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:375
 [Debug] Variable out has writes=1, reads=1
 [Debug] Assignment stmt: out.num = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n]
-[Debug] Return stmt: return out.flt
 Rewrote union pun in function 'half2float' using tenjin_u32_to_f32
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:369:5)
 [Debug] Collected MemberExpr accesses:
 === Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp ===
-float tenjin_u32_to_f32(uint32_t x) {
-    float y;
-    memcpy(&y, &x, sizeof y);
-    return y;
-}
-
 #include "stdint.h"
 
 static uint32_t m__mantissa[2048] = {
@@ -397,6 +398,15 @@ static uint32_t m__exponent[64] = {
     0x8b000000, 0x8b800000, 0x8c000000, 0x8c800000, 0x8d000000, 0x8d800000,
     0x8e000000, 0x8e800000, 0x8f000000, 0xc7800000};
 
+float tenjin_u32_to_f32(uint32_t x) {
+    float y;
+    memcpy(&y, &x, sizeof y);
+    return y;
+}
+
 float half2float(uint16_t h) {
+    
+    int n = h >> 10;
+    
     return tenjin_u32_to_f32(m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n]);
 }

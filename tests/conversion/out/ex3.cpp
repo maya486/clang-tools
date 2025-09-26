@@ -1,11 +1,19 @@
 [Debug] Traversing Function Body for union accesses
 [Debug] Visiting MemberExpr: flt
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
 [Debug] Union passed int/float sized check
 [Debug] Owner variable: in
 [Debug] Access type: write
 [Debug] Visiting MemberExpr: num
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
 [Debug] Union passed int/float sized check
 [Debug] Owner variable: in
 [Debug] Access type: read
@@ -17,7 +25,7 @@
     Field: num | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex3.cpp:113
 [Debug] Variable in has writes=1, reads=1
 [Debug] Assignment stmt: in.flt = flt
-[Debug] Return stmt: <null>
+Rewrote union pun in function 'float2half' using tenjin_f32_to_u32
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex3.cpp:107:5)
@@ -128,14 +136,17 @@ static uint8_t m__shift[512] = {
     0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
     0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x0d};
 
+uint32_t tenjin_f32_to_u32(float x) {
+    uint32_t y;
+    memcpy(&y, &x, sizeof y);
+    return y;
+}
+
 uint16_t float2half(float flt) {
-    union {
-        float flt;
-        uint32_t num;
-    } in;
+    
     uint32_t n, j;
-    in.flt = flt;
-    n = in.num;
+    
+    n = tenjin_f32_to_u32(flt);
     j = (n >> 23) & 0x1ff;
     return (uint16_t)((uint32_t)m__base[j] + ((n & 0x007fffff) >> m__shift[j]));
 }

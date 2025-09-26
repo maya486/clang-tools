@@ -36,17 +36,52 @@
 [Debug] Visiting MemberExpr: channels_per_frame
 [Debug] Visiting MemberExpr: u
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
+[Debug] Union passed int/float sized check
+[Debug] Owner variable: conv64
+[Debug] Access type: write
 [Debug] Visiting MemberExpr: sample_rate
 [Debug] Visiting MemberExpr: u
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
+[Debug] Union passed int/float sized check
+[Debug] Owner variable: conv64
+[Debug] Access type: write
 [Debug] Visiting MemberExpr: u
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
+[Debug] Union passed int/float sized check
+[Debug] Owner variable: conv64
+[Debug] Access type: read
 [Debug] Visiting MemberExpr: sample_rate
 [Debug] Visiting MemberExpr: f
 [Debug] Parent is union: (anonymous)
+[Debug] Checking Union
+[Debug] Union a
+[Debug] Union b
+[Debug] Union c
+[Debug] Union passed int/float sized check
+[Debug] Owner variable: conv64
+[Debug] Access type: read
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: ima_parse
 [Debug] Collected MemberExpr accesses:
+  Variable: conv64 (4 accesses)
+    Field: u | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:148
+    Field: u | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:149
+    Field: u | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:149
+    Field: f | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:150
+[Debug] Variable conv64 has writes=2, reads=2
+[Debug] Assignment stmt: conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u)
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:102:5)

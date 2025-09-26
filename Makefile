@@ -25,13 +25,13 @@ build-tool:
 	cmake -S $(TOOL_DIR) -B $(TOOL_BUILD_DIR) \
 		-DLLVM_DIR=~/llvm-project/build/lib/cmake/llvm \
 		-DClang_DIR=~/llvm-project/build/lib/cmake/clang
-	cmake --build $(TOOL_BUILD_DIR)
+	cmake --build $(TOOL_BUILD_DIR) --parallel 10
 
 # --- BUILD TESTS & COMPILATION DB ---
 .PHONY: build-tests
 build-tests:
 	cmake -S $(TEST_DIR) -B $(TEST_BUILD_DIR) -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-	cmake --build $(TEST_BUILD_DIR) 
+	cmake --build $(TEST_BUILD_DIR)
 
 # --- RUN TOOL ON A SINGLE FILE ---
 .PHONY: inject
