@@ -23,9 +23,8 @@
   Variable: in (2 accesses)
     Field: flt | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/simple1.cpp:9
     Field: num | READ | at /home/mrebholz/clang-tools/tests/conversion/in/simple1.cpp:10
-[Debug] Variable in has writes=1, reads=1
-[Debug] Assignment stmt: in.flt = flt
-Rewrote union pun in function 'simple' using tenjin_f32_to_u32
+[Debug] counts: writes_f=1 reads_f=0 writes_i=0 reads_i=1
+Rewrote union pun for variable 'in' using tenjin_f32_to_u32 with tmp __tenjin_tmp_in
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/simple1.cpp:4:5)
@@ -42,6 +41,6 @@ uint32_t tenjin_f32_to_u32(float x) {
 uint32_t simple(float flt) {
     
     uint32_t n, j;
-    
-    return tenjin_f32_to_u32(flt);
+    float __tenjin_tmp_in = flt;
+    return tenjin_f32_to_u32(__tenjin_tmp_in);
 }

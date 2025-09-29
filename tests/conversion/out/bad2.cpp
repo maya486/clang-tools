@@ -20,14 +20,14 @@
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: foo
 [Debug] Collected MemberExpr accesses:
-  Variable: u2 (1 accesses)
-    Field: f | READ | at /home/mrebholz/clang-tools/tests/conversion/in/bad2.cpp:7
-[Debug] Variable u2 has writes=0, reads=1
-[Debug] Assignment stmt: <null>
   Variable: u1 (1 accesses)
     Field: i | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/bad2.cpp:6
-[Debug] Variable u1 has writes=1, reads=0
-[Debug] Assignment stmt: u1.i = 42
+[Debug] counts: writes_f=0 reads_f=0 writes_i=1 reads_i=0
+[Debug] Not a supported access pattern; skipping
+  Variable: u2 (1 accesses)
+    Field: f | READ | at /home/mrebholz/clang-tools/tests/conversion/in/bad2.cpp:7
+[Debug] counts: writes_f=0 reads_f=1 writes_i=0 reads_i=0
+[Debug] Not a supported access pattern; skipping
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: U

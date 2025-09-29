@@ -23,9 +23,8 @@
   Variable: out (2 accesses)
     Field: num | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:374
     Field: flt | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:375
-[Debug] Variable out has writes=1, reads=1
-[Debug] Assignment stmt: out.num = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n]
-Rewrote union pun in function 'half2float' using tenjin_u32_to_f32
+[Debug] counts: writes_f=0 reads_f=1 writes_i=1 reads_i=0
+Rewrote union pun for variable 'out' using tenjin_u32_to_f32 with tmp __tenjin_tmp_out
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:369:5)
@@ -407,6 +406,6 @@ float tenjin_u32_to_f32(uint32_t x) {
 float half2float(uint16_t h) {
     
     int n = h >> 10;
-    
-    return tenjin_u32_to_f32(m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n]);
+    uint32_t __tenjin_tmp_out = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n];
+    return tenjin_u32_to_f32(__tenjin_tmp_out);
 }

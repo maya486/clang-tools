@@ -33,8 +33,8 @@
     Field: flt | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp:9
     Field: num | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp:10
     Field: flt | READ | at /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp:11
-[Debug] Variable in has writes=2, reads=1
-[Debug] Assignment stmt: in.num = 2
+[Debug] counts: writes_f=1 reads_f=1 writes_i=1 reads_i=0
+[Debug] Not a supported access pattern; skipping
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp:4:5)

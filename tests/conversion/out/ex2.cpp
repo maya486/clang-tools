@@ -80,8 +80,8 @@
     Field: u | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:149
     Field: u | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:149
     Field: f | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:150
-[Debug] Variable conv64 has writes=2, reads=2
-[Debug] Assignment stmt: conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u)
+[Debug] counts: writes_f=0 reads_f=1 writes_i=2 reads_i=1
+Rewrote union pun for variable 'conv64' using tenjin_u64_to_f64 with tmp __tenjin_tmp_conv64
 [Debug] Traversing Function Body for union accesses
 [Debug] Done traversing Function Body for union accesses
 [Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:102:5)
@@ -179,6 +179,12 @@ static ima_u64_t ima_btoh64(ima_u64_t v) {
     return ima_bswap64(v);
 }
 
+double tenjin_u64_to_f64(uint64_t x) {
+    double y;
+    memcpy(&y, &x, sizeof y);
+    return y;
+}
+
 int ima_parse(struct ima_info *info, const void *data) {
     const struct caf_header *header = (const struct caf_header *)data;
     const struct caf_chunk *chunk = (const struct caf_chunk *)&header[1];
@@ -188,10 +194,7 @@ int ima_parse(struct ima_info *info, const void *data) {
     const struct caf_audio_description *desc = nullptr;
     const struct caf_packet_table *pakt = nullptr;
     const struct ima_block *blocks = nullptr;
-    union {
-        ima_f64_t f;
-        ima_u64_t u;
-    } conv64;
+    
     ima_s64_t chunk_size;
     unsigned chunk_type;
     if (ima_btoh32(header->type) !=
@@ -234,8 +237,8 @@ int ima_parse(struct ima_info *info, const void *data) {
     info->size = chunk_size;
     info->frame_count = ima_btoh64(pakt->frame_count);
     info->channel_count = ima_btoh32(desc->channels_per_frame);
-    conv64.u = desc->sample_rate;
-    conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u);
-    info->sample_rate = conv64.f;
+    uint64_t __tenjin_tmp_conv64 = desc->sample_rate;
+    __tenjin_tmp_conv64 = ima_btoh64(*(const ima_u64_t *)&__tenjin_tmp_conv64);
+    info->sample_rate = tenjin_u64_to_f64(__tenjin_tmp_conv64);
     return 0;
 }
