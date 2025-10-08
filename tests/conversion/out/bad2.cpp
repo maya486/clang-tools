@@ -1,43 +1,26 @@
-[Debug] Traversing Function Body for union accesses
-[Debug] Visiting MemberExpr: i
-[Debug] Parent is union: U
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: u1
-[Debug] Access type: write
-[Debug] Visiting MemberExpr: f
-[Debug] Parent is union: U
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: u2
-[Debug] Access type: read
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: foo
-[Debug] Collected MemberExpr accesses:
-  Variable: u1 (1 accesses)
-    Field: i | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/bad2.cpp:6
-[Debug] counts: writes_f=0 reads_f=0 writes_i=1 reads_i=0
-[Debug] Not a supported access pattern; skipping
-  Variable: u2 (1 accesses)
-    Field: f | READ | at /home/mrebholz/clang-tools/tests/conversion/in/bad2.cpp:7
-[Debug] counts: writes_f=0 reads_f=1 writes_i=0 reads_i=0
-[Debug] Not a supported access pattern; skipping
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: U
-[Debug] Collected MemberExpr accesses:
-=== Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/bad2.cpp ===
-//union U { int i; float f; };
+#include <iostream>
 
-void foo() {
+float test(float a) {
     union U { int i; float f; };
     union U u1, u2;
-    u1.i = 42;
+    u1.i = 0;
+    u1.f = 0;
+    u2.i = 0;
+    u2.f = 0;
+    u1.i = int(a);
     float x = u2.f;   // separate variable!
+    return x;
 }
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <float>" << std::endl;
+        return 1;
+    }
+
+    float input = std::stof(argv[1]);
+    std::cout << test(input) << std::endl;
+
+    return 0;
+}
+

@@ -1,4 +1,5 @@
-//#include <stddef.h>
+#include <stddef.h>
+#include <iostream>
 
 typedef unsigned int ima_u32_t;
 typedef unsigned long long ima_u64_t;
@@ -90,63 +91,78 @@ static ima_u64_t ima_btoh64(ima_u64_t v) {
     return ima_bswap64(v);
 }
 
-int ima_parse(struct ima_info *info, const void *data) {
-    const struct caf_header *header = (const struct caf_header *)data;
-    const struct caf_chunk *chunk = (const struct caf_chunk *)&header[1];
-    //const struct caf_audio_description *desc = NULL;
-    //const struct caf_packet_table *pakt = NULL;
-    //const struct ima_block *blocks = NULL;
-    const struct caf_audio_description *desc = nullptr;
-    const struct caf_packet_table *pakt = nullptr;
-    const struct ima_block *blocks = nullptr;
+int test(uint32_t input) {
+//int ima_parse(struct ima_info *info, const void *data) {
+    //const struct caf_header *header = (const struct caf_header *)data;
+    //const struct caf_chunk *chunk = (const struct caf_chunk *)&header[1];
+    ////const struct caf_audio_description *desc = NULL;
+    ////const struct caf_packet_table *pakt = NULL;
+    ////const struct ima_block *blocks = NULL;
+    //const struct caf_audio_description *desc = nullptr;
+    //const struct caf_packet_table *pakt = nullptr;
+    //const struct ima_block *blocks = nullptr;
     union {
         ima_f64_t f;
         ima_u64_t u;
     } conv64;
-    ima_s64_t chunk_size;
-    unsigned chunk_type;
-    if (ima_btoh32(header->type) !=
-        ((ima_u32_t)(ima_u8_t)('f') | ((ima_u32_t)(ima_u8_t)('f') << 8) |
-         ((ima_u32_t)(ima_u8_t)('a') << 16) |
-         ((ima_u32_t)(ima_u8_t)('c') << 24)))
-        return -1;
-    if (ima_btoh16(header->version) != 1)
-        return -2;
-    for (;;) {
-        chunk_type = ima_btoh32(chunk->type);
-        chunk_size = ima_btoh64(chunk->size);
-        if (chunk_type ==
-            ((ima_u32_t)(ima_u8_t)('c') | ((ima_u32_t)(ima_u8_t)('s') << 8) |
-             ((ima_u32_t)(ima_u8_t)('e') << 16) |
-             ((ima_u32_t)(ima_u8_t)('d') << 24)))
-            desc = (const struct caf_audio_description *)&chunk[1];
-        else if (chunk_type == ((ima_u32_t)(ima_u8_t)('t') |
-                                ((ima_u32_t)(ima_u8_t)('k') << 8) |
-                                ((ima_u32_t)(ima_u8_t)('a') << 16) |
-                                ((ima_u32_t)(ima_u8_t)('p') << 24)))
-            pakt = (const struct caf_packet_table *)&chunk[1];
-        else if (chunk_type == ((ima_u32_t)(ima_u8_t)('a') |
-                                ((ima_u32_t)(ima_u8_t)('t') << 8) |
-                                ((ima_u32_t)(ima_u8_t)('a') << 16) |
-                                ((ima_u32_t)(ima_u8_t)('d') << 24))) {
-            blocks = (const struct ima_block *)&(
-                (const struct caf_data *)&chunk[1])[1];
-            break;
-        }
-        chunk = (const struct caf_chunk *)((const ima_u8_t *)&chunk[1] +
-                                           chunk_size);
-    }
-    if (ima_btoh32(desc->format_id) !=
-        ((ima_u32_t)(ima_u8_t)('4') | ((ima_u32_t)(ima_u8_t)('a') << 8) |
-         ((ima_u32_t)(ima_u8_t)('m') << 16) |
-         ((ima_u32_t)(ima_u8_t)('i') << 24)))
-        return -3;
-    info->blocks = blocks;
-    info->size = chunk_size;
-    info->frame_count = ima_btoh64(pakt->frame_count);
-    info->channel_count = ima_btoh32(desc->channels_per_frame);
-    conv64.u = desc->sample_rate;
+    //ima_s64_t chunk_size;
+    //unsigned chunk_type;
+    //if (ima_btoh32(header->type) !=
+        //((ima_u32_t)(ima_u8_t)('f') | ((ima_u32_t)(ima_u8_t)('f') << 8) |
+         //((ima_u32_t)(ima_u8_t)('a') << 16) |
+         //((ima_u32_t)(ima_u8_t)('c') << 24)))
+        //return -1;
+    //if (ima_btoh16(header->version) != 1)
+        //return -2;
+    //for (;;) {
+        //chunk_type = ima_btoh32(chunk->type);
+        //chunk_size = ima_btoh64(chunk->size);
+        //if (chunk_type ==
+            //((ima_u32_t)(ima_u8_t)('c') | ((ima_u32_t)(ima_u8_t)('s') << 8) |
+             //((ima_u32_t)(ima_u8_t)('e') << 16) |
+             //((ima_u32_t)(ima_u8_t)('d') << 24)))
+            //desc = (const struct caf_audio_description *)&chunk[1];
+        //else if (chunk_type == ((ima_u32_t)(ima_u8_t)('t') |
+                                //((ima_u32_t)(ima_u8_t)('k') << 8) |
+                                //((ima_u32_t)(ima_u8_t)('a') << 16) |
+                                //((ima_u32_t)(ima_u8_t)('p') << 24)))
+            //pakt = (const struct caf_packet_table *)&chunk[1];
+        //else if (chunk_type == ((ima_u32_t)(ima_u8_t)('a') |
+                                //((ima_u32_t)(ima_u8_t)('t') << 8) |
+                                //((ima_u32_t)(ima_u8_t)('a') << 16) |
+                                //((ima_u32_t)(ima_u8_t)('d') << 24))) {
+            //blocks = (const struct ima_block *)&(
+                //(const struct caf_data *)&chunk[1])[1];
+            //break;
+        //}
+        //chunk = (const struct caf_chunk *)((const ima_u8_t *)&chunk[1] +
+                                           //chunk_size);
+    //}
+    //if (ima_btoh32(desc->format_id) !=
+        //((ima_u32_t)(ima_u8_t)('4') | ((ima_u32_t)(ima_u8_t)('a') << 8) |
+         //((ima_u32_t)(ima_u8_t)('m') << 16) |
+         //((ima_u32_t)(ima_u8_t)('i') << 24)))
+        //return -3;
+    //info->blocks = blocks;
+    //info->size = chunk_size;
+    //info->frame_count = ima_btoh64(pakt->frame_count);
+    //info->channel_count = ima_btoh32(desc->channels_per_frame);
+    //conv64.u = desc->sample_rate;
+    conv64.u = input;
     conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u);
-    info->sample_rate = conv64.f;
+    //info->sample_rate = conv64.f;
+    //return 0;
+    return conv64.f;
+}
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <float>" << std::endl;
+        return 1;
+    }
+
+    float input = std::stof(argv[1]);
+    std::cout << test((uint32_t)input) << std::endl;
+
     return 0;
 }

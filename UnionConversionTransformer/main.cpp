@@ -19,14 +19,25 @@ using namespace llvm;
 using namespace clang;
 using namespace clang::ast_matchers;
 
+static constexpr bool VERBOSE = false;
+
+struct TransformationLog {
+    bool foundUnion = false;
+    bool replacedUnion = false;
+};
+
+static TransformationLog gLog;
+
 DeclarationMatcher FunctionMatcher = functionDecl(isDefinition()).bind("funcDecl");
 
 static bool isIntFloatSizedTwoFieldUnion(const RecordDecl *RD, ASTContext &Ctx,
                                          const FieldDecl *&out_int_field,
                                          const FieldDecl *&out_float_field) {
-    llvm::outs() << "[Debug] Checking Union\n";
+    if (VERBOSE)
+        llvm::outs() << "[Debug] Checking Union\n";
     if (!RD || !RD->isUnion() || !RD->isCompleteDefinition()) {
-        llvm::outs() << "[Debug] Union is not complete\n";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Union is not complete\n";
         return false;
     }
 
@@ -34,7 +45,8 @@ static bool isIntFloatSizedTwoFieldUnion(const RecordDecl *RD, ASTContext &Ctx,
     const FieldDecl *float_field = nullptr;
     uint64_t int_width = 0, float_width = 0;
     int num_fields = 0;
-    llvm::outs() << "[Debug] Union a\n";
+    if (VERBOSE)
+        llvm::outs() << "[Debug] Union a\n";
 
     for (const FieldDecl *FD : RD->fields()) {
         ++num_fields;
@@ -47,26 +59,32 @@ static bool isIntFloatSizedTwoFieldUnion(const RecordDecl *RD, ASTContext &Ctx,
             int_field = FD;
             int_width = Ctx.getTypeSize(canon);
         } else {
-            llvm::outs() << "[Debug] Union has invalid type\n";
+            if (VERBOSE)
+                llvm::outs() << "[Debug] Union has invalid type\n";
             return false;
         }
     }
 
-    llvm::outs() << "[Debug] Union b\n";
+    if (VERBOSE)
+        llvm::outs() << "[Debug] Union b\n";
 
     if (num_fields != 2 || int_field == nullptr || float_field == nullptr) {
-        llvm::outs() << "[Debug] Union does not have 2 fields, 1 int, 1 float\n";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Union does not have 2 fields, 1 int, 1 float\n";
         return false;
     }
 
     if (int_width != float_width) {
-        llvm::outs() << "[Debug] Union does not have int and float field same width\n";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Union does not have int and float field same width\n";
         return false;
     }
 
-    llvm::outs() << "[Debug] Union c\n";
+    if (VERBOSE)
+        llvm::outs() << "[Debug] Union c\n";
     out_int_field = int_field;
     out_float_field = float_field;
+    gLog.foundUnion = true;
     return true;
 }
 
@@ -87,7 +105,8 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
         if (!FD)
             return true;
 
-        llvm::outs() << "[Debug] Visiting MemberExpr: " << FD->getNameAsString() << "\n";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Visiting MemberExpr: " << FD->getNameAsString() << "\n";
 
         // find parent RecordDecl (works for anonymous unions)
         const RecordDecl *parentRD = nullptr;
@@ -100,19 +119,23 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
         if (!parentRD || !parentRD->isUnion())
             return true;
 
-        llvm::outs() << "[Debug] Parent is union: ";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Parent is union: ";
         if (parentRD->getIdentifier())
-            llvm::outs() << parentRD->getName() << "\n";
-        else
-            llvm::outs() << "(anonymous)\n";
+            if (VERBOSE)
+                llvm::outs() << parentRD->getName() << "\n";
+            else if (VERBOSE)
+                llvm::outs() << "(anonymous)\n";
 
         const FieldDecl *int_field = nullptr, *float_field = nullptr;
         if (!isIntFloatSizedTwoFieldUnion(parentRD, Ctx, int_field, float_field)) {
-            llvm::outs() << "[Debug] Union failed int/float sized check\n";
+            if (VERBOSE)
+                llvm::outs() << "[Debug] Union failed int/float sized check\n";
             return true;
         }
 
-        llvm::outs() << "[Debug] Union passed int/float sized check\n";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Union passed int/float sized check\n";
 
         const Expr *base = ME->getBase()->IgnoreParenImpCasts();
         const VarDecl *ownerVar = nullptr;
@@ -131,7 +154,8 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
         if (!ownerVar)
             return true;
 
-        llvm::outs() << "[Debug] Owner variable: " << ownerVar->getNameAsString() << "\n";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Owner variable: " << ownerVar->getNameAsString() << "\n";
 
         bool isWrite = false;
         auto parents = Ctx.getParents(*ME);
@@ -147,7 +171,8 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
             }
         }
 
-        llvm::outs() << "[Debug] Access type: " << (isWrite ? "write" : "read") << "\n";
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Access type: " << (isWrite ? "write" : "read") << "\n";
 
         AccessRec ar = {FD, ME->getExprLoc(), isWrite, ME};
         accesses[ownerVar].push_back(ar);
@@ -179,21 +204,63 @@ template <typename T> const T *findEnclosingStmt(const Decl *D, ASTContext &Ctx)
     }
     return nullptr;
 }
-template <typename T> const T *findEnclosingStmt(const Expr *E, ASTContext &Ctx) {
-    const Stmt *stmtParent = nullptr;
-    for (DynTypedNode parentNode : Ctx.getParents(*E)) {
-        stmtParent = parentNode.get<Stmt>();
-        while (stmtParent) {
-            if (const T *result = dyn_cast<T>(stmtParent))
-                return result;
+template <typename T> const T *findEnclosingStmt(const Stmt *S, ASTContext &Ctx) {
+    const Stmt *Current = S;
 
-            // climb up
-            auto grandparents = Ctx.getParents(*stmtParent);
-            if (grandparents.empty())
-                break;
-            stmtParent = grandparents[0].get<Stmt>();
+    while (Current) {
+        auto Parents = Ctx.getParents(*Current);
+        if (Parents.empty())
+            break;
+
+        const Stmt *ParentStmt = Parents[0].get<Stmt>();
+        if (!ParentStmt)
+            break;
+
+        if (const T *Target = dyn_cast<T>(ParentStmt))
+            return Target;
+
+        Current = ParentStmt;
+    }
+
+    return nullptr;
+}
+void printParentChain(const Stmt *S, ASTContext &Ctx) {
+    const Stmt *Current = S;
+    llvm::outs() << "=== Parent Chain ===\n";
+    while (Current) {
+        Current->dump();
+        auto Parents = Ctx.getParents(*Current);
+        if (Parents.empty())
+            break;
+        Current = Parents[0].get<Stmt>();
+    }
+}
+template <typename T> const T *findEnclosingStmt(const Expr *E, ASTContext &Ctx) {
+    llvm::SmallVector<clang::DynTypedNode, 8> Worklist;
+
+    // Seed with initial parents
+    for (const DynTypedNode &ParentNode : Ctx.getParents(*E)) {
+        Worklist.push_back(ParentNode);
+    }
+
+    while (!Worklist.empty()) {
+        const DynTypedNode Node = Worklist.pop_back_val();
+
+        if (const Stmt *S = Node.get<Stmt>()) {
+            if (const T *Target = dyn_cast<T>(S))
+                return Target;
+
+            // Push parents of this Stmt
+            for (const DynTypedNode &P : Ctx.getParents(*S))
+                Worklist.push_back(P);
+
+        } else if (const Decl *D = Node.get<Decl>()) {
+            // Decl may be in DeclStmt, which is a Stmt
+            for (const DynTypedNode &P : Ctx.getParents(*D))
+                Worklist.push_back(P);
         }
     }
+
     return nullptr;
 }
 
@@ -254,339 +321,360 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         const FunctionDecl *FD = Result.Nodes.getNodeAs<FunctionDecl>("funcDecl");
         if (!FD || !FD->hasBody())
             return;
+
         ASTContext &Ctx = *Result.Context;
         Stmt *Body = FD->getBody();
 
+        if (Ctx.getSourceManager().isInSystemHeader(FD->getLocation())) {
+            return; // skip STL, libc++
+        }
+
         MemberAccessVisitor V(Ctx);
-
-        llvm::outs() << "[Debug] Traversing Function Body for union accesses\n";
-        V.TraverseStmt(Body);
-        llvm::outs() << "[Debug] Done traversing Function Body for union accesses\n";
-
-        llvm::outs() << "[Debug] Function: " << FD->getNameAsString() << "\n";
-        llvm::outs() << "[Debug] Collected MemberExpr accesses:\n";
+        traverseFunctionBody(Body, V);
 
         for (auto &pair : V.accesses) {
-            const VarDecl *VD = pair.first;
-            auto seq = pair.second; // copy because we may sort
-            if (seq.empty())
-                continue;
-
-            llvm::outs() << "  Variable: " << VD->getNameAsString() << " (" << seq.size()
-                         << " accesses)\n";
-
-            for (const auto &a : seq) {
-                PresumedLoc ploc = Ctx.getSourceManager().getPresumedLoc(a.loc);
-                std::string locStr =
-                    ploc.isValid()
-                        ? (std::string(ploc.getFilename()) + ":" + std::to_string(ploc.getLine()))
-                        : "<unknown>";
-                llvm::outs() << "    Field: " << a.field->getNameAsString() << " | "
-                             << (a.isWrite ? "WRITE" : "READ") << " | at " << locStr << "\n";
-            }
-
-            // Sort accesses by source location (file offset) to obtain program order
-            std::sort(seq.begin(), seq.end(), [&Ctx](const AccessRec &A, const AccessRec &B) {
-                const SourceManager &SM = Ctx.getSourceManager();
-                if (A.loc.isInvalid() || B.loc.isInvalid())
-                    return false;
-                return SM.getFileOffset(A.loc) < SM.getFileOffset(B.loc);
-            });
-
-            // Count per-field reads/writes
-            unsigned writes_f = 0, reads_f = 0;
-            unsigned writes_i = 0, reads_i = 0;
-            const FieldDecl *floatField = nullptr, *intField = nullptr;
-            for (const auto &a : seq) {
-                QualType ft = a.field->getType();
-                if (ft->isFloatingType())
-                    floatField = a.field;
-                else if (ft->isIntegerType())
-                    intField = a.field;
-
-                if (a.field->getType()->isFloatingType()) {
-                    if (a.isWrite)
-                        ++writes_f;
-                    else
-                        ++reads_f;
-                } else if (a.field->getType()->isIntegerType()) {
-                    if (a.isWrite)
-                        ++writes_i;
-                    else
-                        ++reads_i;
-                }
-            }
-
-            llvm::outs() << "[Debug] counts: writes_f=" << writes_f << " reads_f=" << reads_f
-                         << " writes_i=" << writes_i << " reads_i=" << reads_i << "\n";
-
-            bool tryFloatToInt = (reads_i == 1 && writes_i == 0 && (writes_f + reads_f > 0));
-            bool tryIntToFloat = (reads_f == 1 && writes_f == 0 && (writes_i + reads_i > 0));
-
-            if (!tryFloatToInt && !tryIntToFloat) {
-                llvm::outs() << "[Debug] Not a supported access pattern; skipping\n";
-                continue;
-            }
-
-            const FieldDecl *srcField = nullptr;
-            const FieldDecl *dstField = nullptr;
-            bool srcIsFloat = false;
-            if (tryFloatToInt) {
-                srcField = floatField;
-                dstField = intField;
-                srcIsFloat = true;
-            } else if (tryIntToFloat) {
-                srcField = intField;
-                dstField = floatField;
-                srcIsFloat = false;
-            } else {
-                continue;
-            }
-
-            // Ensure no writes to the dstField
-            bool anyDstWrites = false;
-            for (const auto &a : seq)
-                if (a.field == dstField && a.isWrite)
-                    anyDstWrites = true;
-            if (anyDstWrites) {
-                llvm::outs() << "[Debug] There are writes to the destination field; skipping\n";
-                continue;
-            }
-
-            // Ensure all accesses are inside same CompoundStmt
-            const CompoundStmt *enclosingCompound = nullptr;
-            bool sameCompound = true;
-            for (const auto &a : seq) {
-                const CompoundStmt *C = findEnclosingStmt<CompoundStmt>(a.expr, Ctx);
-                if (!C) {
-                    sameCompound = false;
-                    break;
-                }
-                if (!enclosingCompound)
-                    enclosingCompound = C;
-                else if (enclosingCompound != C) {
-                    sameCompound = false;
-                    break;
-                }
-            }
-            if (!sameCompound || !enclosingCompound) {
-                llvm::outs() << "[Debug] Not all accesses in same CompoundStmt; skipping\n";
-                continue;
-            }
-
-            // Find the single dst read access and index
-            AccessRec dstReadRec;
-            bool foundDstRead = false;
-            size_t dstIndex = 0;
-            for (size_t i = 0; i < seq.size(); ++i) {
-                if (seq[i].field == dstField && !seq[i].isWrite) {
-                    dstReadRec = seq[i];
-                    foundDstRead = true;
-                    dstIndex = i;
-                    break;
-                }
-            }
-            if (!foundDstRead) {
-                llvm::outs() << "[Debug] Couldn't find destination read; skipping\n";
-                continue;
-            }
-
-            // Ensure there is a source write before dst read
-            size_t firstSrcWriteIndex = SIZE_MAX;
-            for (size_t i = 0; i < dstIndex; ++i) {
-                if (seq[i].field == srcField && seq[i].isWrite) {
-                    firstSrcWriteIndex = i;
-                    break;
-                }
-            }
-            if (firstSrcWriteIndex == SIZE_MAX) {
-                llvm::outs() << "[Debug] No source write before destination read; skipping\n";
-                continue;
-            }
-
-            // Good — we will:
-            // - replace the first source write statement with "T tmp = <rhs>;"
-            // - remove union var declaration
-            // - replace remaining src memberexprs with tmp name
-            // - replace dst read with func(tmp)
-            // Gather edits and apply in descending offset order.
-
-            SourceManager &SM = Ctx.getSourceManager();
-            LangOptions LO = Ctx.getLangOpts();
-
-            // Type strings
-            QualType srcType = srcField->getType();
-            QualType dstType = dstField->getType();
-            uint64_t srcSize = Ctx.getTypeSize(srcType);
-            std::string srcC;
-            if (srcType->isFloatingType())
-                srcC = (srcSize == 32) ? "float" : "double";
-            else
-                srcC = (srcType->isUnsignedIntegerType() ? "uint" : "int") +
-                       std::to_string(srcSize) + "_t";
-
-            std::string funcName = generateFuncName(srcType, dstType, Ctx);
-            std::string funcCode = generateUnionConversionFunction(srcType, dstType, Ctx);
-            if (funcName.empty() || funcCode.empty()) {
-                llvm::outs() << "[Debug] Could not generate conversion function; skipping\n";
-                continue;
-            }
-
-            // Prepare tmp name
-            std::string tmpName = "__tenjin_tmp_" + VD->getNameAsString();
-
-            // Collect edits
-            struct Edit {
-                unsigned offset;
-                SourceLocation start;
-                SourceLocation end;
-                std::string text;
-            };
-            std::vector<Edit> edits;
-
-            // 1) Remove union declaration (replace with empty)
-            const DeclStmt *declStmt = findEnclosingStmt<DeclStmt>(VD, Ctx);
-            if (!declStmt) {
-                llvm::outs() << "[Debug] Couldn't find enclosing DeclStmt; skipping\n";
-                continue;
-            }
-
-            // Get the start and end of the statement
-            SourceLocation start = declStmt->getBeginLoc();
-            SourceLocation end = Lexer::getLocForEndOfToken(declStmt->getEndLoc(), 0, SM, LO);
-
-            if (start.isValid() && end.isValid()) {
-                unsigned off = SM.getFileOffset(start);
-                edits.push_back(
-                    {off, start, end, ""}); // remove entire statement including semicolon
-            } else {
-                llvm::outs() << "[Debug] Invalid DeclStmt source range; skipping\n";
-                continue;
-            }
-            // SourceRange unionRange = VD->getSourceRange();
-            // SourceLocation unionEnd = Lexer::getLocForEndOfToken(unionRange.getEnd(), 0, SM, LO);
-            // Token afterUnion;
-            // if (!Lexer::getRawToken(unionEnd, afterUnion, SM, LO, true) &&
-            // afterUnion.is(tok::semi)) {
-            // unionEnd = afterUnion.getLocation(); // extend to semicolon
-            //}
-
-            // SourceLocation unionStart = unionRange.getBegin();
-            // if (unionStart.isValid() && unionEnd.isValid()) {
-            // unsigned off = SM.getFileOffset(unionStart);
-            // edits.push_back({off, unionStart, unionEnd, std::string("")});
-            //} else {
-            // llvm::outs() << "[Debug] Invalid union source range; skipping\n";
-            // continue;
-            //}
-
-            // 2) Replace the first source write assignment with an initialized tmp decl
-            const AccessRec &firstSrcWrite = seq[firstSrcWriteIndex];
-            const BinaryOperator *assignStmt =
-                findEnclosingStmt<BinaryOperator>(firstSrcWrite.expr, Ctx);
-
-            // Fallback: if ExprStmt not found, just use the BinaryOperator itself
-            // if (!assignStmt)
-            // assignStmt = findEnclosingStmt<BinaryOperator>(firstSrcWrite.expr, Ctx);
-
-            if (!assignStmt) {
-                llvm::outs() << "[Debug] Couldn't find assignment statement for first source "
-                                "write; skipping\n";
-                continue;
-            }
-
-            // Get start and end of the statement
-            SourceLocation assignStart = assignStmt->getBeginLoc();
-            SourceLocation assignEnd =
-                Lexer::getLocForEndOfToken(assignStmt->getEndLoc(), 0, SM, LO);
-            Token afterAssign;
-            if (!Lexer::getRawToken(assignEnd, afterAssign, SM, LO, true) &&
-                afterAssign.is(tok::semi)) {
-                assignEnd = afterAssign.getLocation();
-            }
-            // Double-check validity
-            if (!assignStart.isValid() || !assignEnd.isValid()) {
-                llvm::outs() << "[Debug] Invalid assign stmt range; skipping\n";
-                continue;
-            }
-            // const BinaryOperator *assignStmt =
-            // findEnclosingStmt<BinaryOperator>(firstSrcWrite.expr, Ctx);
-            // if (!assignStmt) {
-            // llvm::outs() << "[Debug] Couldn't find assignment statement for first source "
-            //"write; skipping\n";
-            // continue;
-            //}
-            // SourceLocation assignStart = assignStmt->getSourceRange().getBegin();
-            // SourceLocation assignEnd =
-            // Lexer::getLocForEndOfToken(assignStmt->getSourceRange().getEnd(), 0, SM, LO);
-            // Token afterAssign;
-            // if (!Lexer::getRawToken(assignEnd, afterAssign, SM, LO, true) &&
-            // afterAssign.is(tok::semi)) {
-            // assignEnd = afterAssign.getLocation();
-            //}
-            // if (!assignStart.isValid() || !assignEnd.isValid()) {
-            // llvm::outs() << "[Debug] Invalid assign stmt range; skipping\n";
-            // continue;
-            //}
-            // Extract RHS text
-            const Expr *rhs = assignStmt->getRHS()->IgnoreParenImpCasts();
-            std::string rhsText =
-                Lexer::getSourceText(CharSourceRange::getTokenRange(rhs->getSourceRange()), SM, LO)
-                    .str();
-
-            // Build tmp declaration with initializer
-            std::string tmpDecl = srcC + " " + tmpName + " = " + rhsText;
-
-            edits.push_back({SM.getFileOffset(assignStart), assignStart, assignEnd, tmpDecl});
-
-            // Keep assign range offsets so we can skip memberexprs inside it
-            unsigned assignStartOff = SM.getFileOffset(assignStart);
-            unsigned assignEndOff = SM.getFileOffset(assignEnd);
-
-            // 3) Replace member expressions — skip those that are inside the replaced assignStmt
-            for (const auto &a : seq) {
-                SourceLocation meStart = a.expr->getSourceRange().getBegin();
-                SourceLocation meEnd =
-                    Lexer::getLocForEndOfToken(a.expr->getSourceRange().getEnd(), 0, SM, LO);
-                if (!meStart.isValid() || !meEnd.isValid())
-                    continue;
-                unsigned meOff = SM.getFileOffset(meStart);
-
-                // If this MemberExpr sits inside the assignment we already replaced, skip it
-                if (meOff >= assignStartOff && meOff <= assignEndOff)
-                    continue;
-
-                if (a.field == srcField) {
-                    // replace in.flt with tmpName
-                    edits.push_back({meOff, meStart, meEnd, tmpName});
-                } else if (a.field == dstField && !a.isWrite) {
-                    // replace in.num with func(tmpName)
-                    std::string repl = funcName + "(" + tmpName + ")";
-                    edits.push_back({meOff, meStart, meEnd, repl});
-                }
-            }
-
-            // 4) Insert conversion function above the function (keep this as-is)
-            SourceLocation funcInsertLoc = FD->getSourceRange().getBegin();
-            TheRewriter.InsertTextBefore(funcInsertLoc, funcCode + "\n");
-
-            // 5) Apply edits in descending file offset order to avoid overlapping edit issues
-            std::sort(edits.begin(), edits.end(), [](const Edit &A, const Edit &B) {
-                return A.offset > B.offset; // descending
-            });
-
-            for (const auto &e : edits) {
-                // Replace the text in one shot
-                TheRewriter.ReplaceText(CharSourceRange::getCharRange(e.start, e.end), e.text);
-            }
-
-            llvm::outs() << "Rewrote union pun for variable '" << VD->getNameAsString()
-                         << "' using " << funcName << " with tmp " << tmpName << "\n";
+            handleVariableAccess(FD, pair.first, pair.second, Ctx);
         }
     }
 
   private:
     Rewriter &TheRewriter;
+
+    void traverseFunctionBody(Stmt *Body, MemberAccessVisitor &V) {
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Traversing Function Body for union accesses\n";
+        V.TraverseStmt(Body);
+        if (VERBOSE)
+            llvm::outs() << "[Debug] Done traversing Function Body for union accesses\n";
+    }
+
+    void handleVariableAccess(const FunctionDecl *FD, const VarDecl *VD, std::vector<AccessRec> seq,
+                              ASTContext &Ctx) {
+        if (seq.empty())
+            return;
+
+        printAccesses(VD, seq, Ctx);
+        std::sort(seq.begin(), seq.end(), [&Ctx](const AccessRec &A, const AccessRec &B) {
+            return compareBySource(A, B, Ctx);
+        });
+
+        unsigned writes_f, reads_f, writes_i, reads_i;
+        const FieldDecl *floatField = nullptr, *intField = nullptr;
+        countFieldAccesses(seq, writes_f, reads_f, writes_i, reads_i, floatField, intField);
+
+        bool tryFloatToInt = (reads_i >= 1 && writes_i == 0 && (writes_f + reads_f > 0));
+        bool tryIntToFloat = (reads_f >= 1 && writes_f == 0 && (writes_i + reads_i > 0));
+        if (!tryFloatToInt && !tryIntToFloat) {
+            if (VERBOSE)
+                llvm::outs() << "[Debug] Not a supported access pattern; skipping\n";
+            return;
+        }
+
+        const FieldDecl *srcField = tryFloatToInt ? floatField : intField;
+        const FieldDecl *dstField = tryFloatToInt ? intField : floatField;
+        bool srcIsFloat = tryFloatToInt;
+
+        if (!validateAccessSequence(seq, srcField, dstField, Ctx))
+            return;
+
+        SourceManager &SM = Ctx.getSourceManager();
+        LangOptions LO = Ctx.getLangOpts();
+
+        std::string srcC = getTypeString(srcField->getType(), Ctx);
+        std::string funcName = generateFuncName(srcField->getType(), dstField->getType(), Ctx);
+        std::string funcCode =
+            generateUnionConversionFunction(srcField->getType(), dstField->getType(), Ctx);
+        if (funcName.empty() || funcCode.empty()) {
+            if (VERBOSE)
+                llvm::outs() << "[Debug] Could not generate conversion function; skipping\n";
+            return;
+        }
+
+        applyEdits(FD, VD, seq, srcField, dstField, srcC, funcName, funcCode, Ctx);
+    }
+
+    void printAccesses(const VarDecl *VD, const std::vector<AccessRec> &seq, ASTContext &Ctx) {
+        if (VERBOSE)
+            llvm::outs() << "  Variable: " << VD->getNameAsString() << " (" << seq.size()
+                         << " accesses)\n";
+        for (const auto &a : seq) {
+            PresumedLoc ploc = Ctx.getSourceManager().getPresumedLoc(a.loc);
+            std::string locStr =
+                ploc.isValid()
+                    ? (std::string(ploc.getFilename()) + ":" + std::to_string(ploc.getLine()))
+                    : "<unknown>";
+            if (VERBOSE)
+                llvm::outs() << "    Field: " << a.field->getNameAsString() << " | "
+                             << (a.isWrite ? "WRITE" : "READ") << " | at " << locStr << "\n";
+        }
+    }
+
+    static bool compareBySource(const AccessRec &A, const AccessRec &B, ASTContext &Ctx) {
+        const SourceManager &SM = Ctx.getSourceManager();
+        if (A.loc.isInvalid() || B.loc.isInvalid())
+            return false;
+        return SM.getFileOffset(A.loc) < SM.getFileOffset(B.loc);
+    }
+
+    void countFieldAccesses(const std::vector<AccessRec> &seq, unsigned &writes_f,
+                            unsigned &reads_f, unsigned &writes_i, unsigned &reads_i,
+                            const FieldDecl *&floatField, const FieldDecl *&intField) {
+        writes_f = reads_f = writes_i = reads_i = 0;
+        for (const auto &a : seq) {
+            QualType ft = a.field->getType();
+            if (ft->isFloatingType())
+                floatField = a.field;
+            else if (ft->isIntegerType())
+                intField = a.field;
+
+            if (ft->isFloatingType()) {
+                if (a.isWrite)
+                    ++writes_f;
+                else
+                    ++reads_f;
+            } else if (ft->isIntegerType()) {
+                if (a.isWrite)
+                    ++writes_i;
+                else
+                    ++reads_i;
+            }
+        }
+
+        if (VERBOSE)
+            llvm::outs() << "[Debug] counts: writes_f=" << writes_f << " reads_f=" << reads_f
+                         << " writes_i=" << writes_i << " reads_i=" << reads_i << "\n";
+    }
+
+    void printExprAndCompoundStmt(const Expr *E, const ASTContext &Ctx, const CompoundStmt *C) {
+        clang::LangOptions LO;
+        LO.CPlusPlus = true;
+        clang::PrintingPolicy PP(LO);
+
+        std::string ExprStr, StmtStr;
+        llvm::raw_string_ostream ExprOS(ExprStr), StmtOS(StmtStr);
+
+        if (E)
+            E->printPretty(ExprOS, nullptr, PP);
+        if (C)
+            C->printPretty(StmtOS, nullptr, PP);
+
+        if (!C) {
+            if (VERBOSE)
+                llvm::outs() << "[Debug] Couldn't find an enclosing CompoundStmt for: "
+                             << ExprOS.str() << "\n";
+        } else {
+            if (VERBOSE)
+                llvm::outs() << "[Debug] Found enclosing CompoundStmt for: " << ExprOS.str() << "\n"
+                             << "[Debug] CompoundStmt: " << StmtOS.str() << "\n";
+        }
+    }
+
+    bool validateAccessSequence(const std::vector<AccessRec> &seq, const FieldDecl *srcField,
+                                const FieldDecl *dstField, ASTContext &Ctx) {
+        const CompoundStmt *enclosingCompound = nullptr;
+        for (const auto &a : seq) {
+            const CompoundStmt *C = findEnclosingStmt<CompoundStmt>(a.expr, Ctx);
+            if (VERBOSE)
+                printExprAndCompoundStmt(a.expr, Ctx, C);
+            if (VERBOSE)
+                printParentChain(a.expr, Ctx);
+            if (!C || (enclosingCompound && enclosingCompound != C)) {
+                if (VERBOSE)
+                    llvm::outs() << "[Debug] Not all accesses in same CompoundStmt; skipping\n";
+                return false;
+            }
+            enclosingCompound = C;
+        }
+
+        bool anyDstWrites = false;
+        for (const auto &a : seq)
+            if (a.field == dstField && a.isWrite)
+                anyDstWrites = true;
+        if (anyDstWrites) {
+            if (VERBOSE)
+                llvm::outs() << "[Debug] There are writes to the destination field; skipping\n";
+            return false;
+        }
+
+        bool foundSrcWriteBeforeDstRead = false;
+        for (size_t i = 0; i < seq.size(); ++i) {
+            if (seq[i].field == dstField && !seq[i].isWrite) {
+                for (size_t j = 0; j < i; ++j)
+                    if (seq[j].field == srcField && seq[j].isWrite)
+                        foundSrcWriteBeforeDstRead = true;
+                break;
+            }
+        }
+
+        if (!foundSrcWriteBeforeDstRead) {
+            if (VERBOSE)
+                llvm::outs() << "[Debug] No source write before destination read; skipping\n";
+            return false;
+        }
+
+        return true;
+    }
+
+    std::string getTypeString(QualType T, ASTContext &Ctx) {
+        uint64_t size = Ctx.getTypeSize(T);
+        if (T->isFloatingType())
+            return (size == 32) ? "float" : "double";
+        else
+            return (T->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(size) + "_t";
+    }
+
+    void applyEdits(const FunctionDecl *FD, const VarDecl *VD, const std::vector<AccessRec> &seq,
+                    const FieldDecl *srcField, const FieldDecl *dstField, const std::string &srcC,
+                    const std::string &funcName, const std::string &funcCode, ASTContext &Ctx) {
+        SourceManager &SM = Ctx.getSourceManager();
+        LangOptions LO = Ctx.getLangOpts();
+        std::vector<Edit> edits;
+
+        std::string tmp_in_name = "__tenjin_tmp_in_" + VD->getNameAsString();
+        std::string tmp_out_name = "__tenjin_tmp_out_" + VD->getNameAsString();
+
+        // === Remove union declaration ===
+        const DeclStmt *declStmt = findEnclosingStmt<DeclStmt>(VD, Ctx);
+        if (!declStmt)
+            return;
+
+        SourceLocation start = declStmt->getBeginLoc();
+        SourceLocation end = Lexer::getLocForEndOfToken(declStmt->getEndLoc(), 0, SM, LO);
+        edits.push_back({SM.getFileOffset(start), start, end, ""});
+
+        // === First write: used for temp input assignment ===
+        auto firstSrcWriteIt = std::find_if(seq.begin(), seq.end(), [srcField](const AccessRec &a) {
+            return a.field == srcField && a.isWrite;
+        });
+        if (firstSrcWriteIt == seq.end())
+            return;
+        const AccessRec &firstSrcWrite = *firstSrcWriteIt;
+
+        const BinaryOperator *firstAssign =
+            findEnclosingStmt<BinaryOperator>(firstSrcWrite.expr, Ctx);
+        if (!firstAssign)
+            return;
+
+        SourceLocation assignStart = firstAssign->getBeginLoc();
+        SourceLocation assignEnd = Lexer::getLocForEndOfToken(firstAssign->getEndLoc(), 0, SM, LO);
+        const Expr *rhs = firstAssign->getRHS()->IgnoreParenImpCasts();
+        std::string rhsText =
+            Lexer::getSourceText(CharSourceRange::getTokenRange(rhs->getSourceRange()), SM, LO)
+                .str();
+        edits.push_back({SM.getFileOffset(assignStart), assignStart, assignEnd,
+                         srcC + " " + tmp_in_name + " = " + rhsText });
+
+        unsigned assignStartOff = SM.getFileOffset(assignStart);
+        unsigned assignEndOff = SM.getFileOffset(assignEnd);
+
+        // === Last write: location to insert the output conversion ===
+        auto lastSrcWriteIt =
+            std::find_if(seq.rbegin(), seq.rend(), [srcField](const AccessRec &a) {
+                return a.field == srcField && a.isWrite;
+            });
+        if (lastSrcWriteIt == seq.rend())
+            return;
+        const AccessRec &lastSrcWrite = *lastSrcWriteIt;
+
+        const Stmt *lastWriteStmt = findEnclosingStmt<Stmt>(lastSrcWrite.expr, Ctx);
+        if (!lastWriteStmt)
+            return;
+
+        // SourceLocation insertAfterWrite =
+        // Lexer::getLocForEndOfToken(lastWriteStmt->getEndLoc(), 0, SM, LO);
+        // Step 1: Get end of the statement (after semicolon)
+        SourceLocation afterStmtLoc =
+            Lexer::getLocForEndOfToken(lastWriteStmt->getEndLoc(), 0, SM, LO);
+
+        // Step 2: Get line number of the statement
+        unsigned lineNumber = SM.getSpellingLineNumber(afterStmtLoc);
+        SourceLocation lineStartLoc =
+            SM.translateLineCol(SM.getFileID(afterStmtLoc), lineNumber, 1);
+
+        // Step 3: Extract indentation from beginning of line
+        llvm::StringRef lineText =
+            Lexer::getSourceText(CharSourceRange::getCharRange(lineStartLoc, afterStmtLoc), SM, LO);
+
+        std::string indentation;
+        for (char c : lineText) {
+            if (c == ' ' || c == '\t')
+                indentation += c;
+            else
+                break;
+        }
+
+        // Step 4: Insert text with indentation
+        std::string dstC = getTypeString(dstField->getType(), Ctx);
+        std::string finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + " = " +
+                                  funcName + "(" + tmp_in_name + ");";
+        TheRewriter.InsertTextAfterToken(afterStmtLoc, finalInsert);
+        // SourceLocation insertAfterWrite = Lexer::findLocationAfterToken(
+        // lastWriteStmt->getEndLoc(), tok::semi, SM, LO,
+        // [>SkipTrailingWhitespaceAndNewLine=<]true);
+
+        // edits.push_back({
+        // SM.getFileOffset(insertAfterWrite),
+        // insertAfterWrite,
+        // insertAfterWrite,
+        // dstC + " " + tmp_out_name + " = " + funcName + "(" + tmp_in_name + ");\n"
+        //});
+
+        // === Replace member expressions ===
+        for (const auto &a : seq) {
+            SourceLocation meStart = a.expr->getSourceRange().getBegin();
+            SourceLocation meEnd =
+                Lexer::getLocForEndOfToken(a.expr->getSourceRange().getEnd(), 0, SM, LO);
+            if (!meStart.isValid() || !meEnd.isValid())
+                continue;
+
+            unsigned meOff = SM.getFileOffset(meStart);
+
+            // Skip member expressions that were inside the removed assignment
+            if (meOff >= assignStartOff && meOff <= assignEndOff)
+                continue;
+
+            if (a.field == srcField) {
+                edits.push_back({meOff, meStart, meEnd, tmp_in_name});
+            } else if (a.field == dstField && !a.isWrite) {
+                edits.push_back({meOff, meStart, meEnd, tmp_out_name});
+            }
+        }
+
+        // === Insert conversion function above function definition ===
+        TheRewriter.InsertTextBefore(FD->getSourceRange().getBegin(), funcCode + "\n");
+
+        // === Ensure #include <cstring> is present ===
+        SourceLocation funcInsertLoc = FD->getSourceRange().getBegin();
+        FileID FID = SM.getFileID(funcInsertLoc);
+        const FileEntry *FE = SM.getFileEntryForID(FID);
+        if (FE) {
+            llvm::StringRef buffer = SM.getBufferData(FID);
+            if (!buffer.contains("#include <cstring>")) {
+                SourceLocation fileStart = SM.getLocForStartOfFile(FID);
+                TheRewriter.InsertTextBefore(fileStart, "#include <cstring>\n");
+            }
+        }
+
+        // === Apply all edits in reverse order ===
+        std::sort(edits.begin(), edits.end(),
+                  [](const Edit &A, const Edit &B) { return A.offset > B.offset; });
+        for (const auto &e : edits)
+            TheRewriter.ReplaceText(CharSourceRange::getCharRange(e.start, e.end), e.text);
+
+        if (VERBOSE)
+            llvm::outs() << "Rewrote union pun for variable '" << VD->getNameAsString()
+                         << "' using " << funcName << " with tmps " << tmp_in_name << " "
+                         << tmp_out_name << "\n";
+
+        gLog.replacedUnion = true;
+    }
+
+    struct Edit {
+        unsigned offset;
+        SourceLocation start;
+        SourceLocation end;
+        std::string text;
+    };
 };
 
 static llvm::cl::OptionCategory MyToolCategory("my-tool options");
@@ -600,7 +688,13 @@ class RewriteAction : public ASTFrontendAction {
     void EndSourceFileAction() override {
         SourceManager &SM = TheRewriter.getSourceMgr();
         if (auto FE = SM.getFileEntryRefForID(SM.getMainFileID())) {
-            llvm::outs() << "=== Rewritten File: " << FE->getName() << " ===\n";
+            if (VERBOSE) {
+                llvm::outs() << "=== Rewritten File: " << FE->getName() << " ===\n";
+            }
+
+            llvm::errs() << "[SUMMARY] " << FE->getName()
+                         << " union_found=" << (gLog.foundUnion ? "yes" : "no")
+                         << " union_replaced=" << (gLog.replacedUnion ? "yes" : "no") << "\n";
         }
         TheRewriter.getEditBuffer(SM.getMainFileID()).write(llvm::outs());
     }

@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <iostream>
 
 static uint16_t m__base[512] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -103,7 +104,7 @@ static uint8_t m__shift[512] = {
     0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
     0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x0d};
 
-uint16_t float2half(float flt) {
+uint16_t test(float flt) {
     union {
         float flt;
         uint32_t num;
@@ -113,4 +114,16 @@ uint16_t float2half(float flt) {
     n = in.num;
     j = (n >> 23) & 0x1ff;
     return (uint16_t)((uint32_t)m__base[j] + ((n & 0x007fffff) >> m__shift[j]));
+}
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <float>" << std::endl;
+        return 1;
+    }
+
+    float input = std::stof(argv[1]);
+    std::cout << test(input) << std::endl;
+
+    return 0;
 }

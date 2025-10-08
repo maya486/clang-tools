@@ -1,36 +1,6 @@
-[Debug] Traversing Function Body for union accesses
-[Debug] Visiting MemberExpr: num
-[Debug] Parent is union: (anonymous)
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: out
-[Debug] Access type: write
-[Debug] Visiting MemberExpr: flt
-[Debug] Parent is union: (anonymous)
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: out
-[Debug] Access type: read
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: half2float
-[Debug] Collected MemberExpr accesses:
-  Variable: out (2 accesses)
-    Field: num | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:374
-    Field: flt | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:375
-[Debug] counts: writes_f=0 reads_f=1 writes_i=1 reads_i=0
-Rewrote union pun for variable 'out' using tenjin_u32_to_f32 with tmp __tenjin_tmp_out
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:369:5)
-[Debug] Collected MemberExpr accesses:
-=== Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp ===
+#include <cstring>
 #include "stdint.h"
+#include <iostream>
 
 static uint32_t m__mantissa[2048] = {
     0x00000000, 0x33800000, 0x34000000, 0x34400000, 0x34800000, 0x34a00000,
@@ -403,9 +373,22 @@ float tenjin_u32_to_f32(uint32_t x) {
     return y;
 }
 
-float half2float(uint16_t h) {
+float test(uint16_t h) {
     
     int n = h >> 10;
-    uint32_t __tenjin_tmp_out = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n];
-    return tenjin_u32_to_f32(__tenjin_tmp_out);
+    uint32_t __tenjin_tmp_in_out = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n];
+    float __tenjin_tmp_out_out = tenjin_u32_to_f32(__tenjin_tmp_in_out);
+    return __tenjin_tmp_out_out;
+}
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <float>" << std::endl;
+        return 1;
+    }
+
+    float input = std::stof(argv[1]);
+    std::cout << test((uint16_t)input) << std::endl;
+
+    return 0;
 }

@@ -1,93 +1,6 @@
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: ima_bswap16
-[Debug] Collected MemberExpr accesses:
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: ima_bswap32
-[Debug] Collected MemberExpr accesses:
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: ima_bswap64
-[Debug] Collected MemberExpr accesses:
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: ima_btoh16
-[Debug] Collected MemberExpr accesses:
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: ima_btoh32
-[Debug] Collected MemberExpr accesses:
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: ima_btoh64
-[Debug] Collected MemberExpr accesses:
-[Debug] Traversing Function Body for union accesses
-[Debug] Visiting MemberExpr: type
-[Debug] Visiting MemberExpr: version
-[Debug] Visiting MemberExpr: type
-[Debug] Visiting MemberExpr: size
-[Debug] Visiting MemberExpr: format_id
-[Debug] Visiting MemberExpr: blocks
-[Debug] Visiting MemberExpr: size
-[Debug] Visiting MemberExpr: frame_count
-[Debug] Visiting MemberExpr: frame_count
-[Debug] Visiting MemberExpr: channel_count
-[Debug] Visiting MemberExpr: channels_per_frame
-[Debug] Visiting MemberExpr: u
-[Debug] Parent is union: (anonymous)
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: conv64
-[Debug] Access type: write
-[Debug] Visiting MemberExpr: sample_rate
-[Debug] Visiting MemberExpr: u
-[Debug] Parent is union: (anonymous)
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: conv64
-[Debug] Access type: write
-[Debug] Visiting MemberExpr: u
-[Debug] Parent is union: (anonymous)
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: conv64
-[Debug] Access type: read
-[Debug] Visiting MemberExpr: sample_rate
-[Debug] Visiting MemberExpr: f
-[Debug] Parent is union: (anonymous)
-[Debug] Checking Union
-[Debug] Union a
-[Debug] Union b
-[Debug] Union c
-[Debug] Union passed int/float sized check
-[Debug] Owner variable: conv64
-[Debug] Access type: read
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: ima_parse
-[Debug] Collected MemberExpr accesses:
-  Variable: conv64 (4 accesses)
-    Field: u | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:148
-    Field: u | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:149
-    Field: u | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:149
-    Field: f | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:150
-[Debug] counts: writes_f=0 reads_f=1 writes_i=2 reads_i=1
-Rewrote union pun for variable 'conv64' using tenjin_u64_to_f64 with tmp __tenjin_tmp_conv64
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Function: (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:102:5)
-[Debug] Collected MemberExpr accesses:
-=== Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp ===
-//#include <stddef.h>
+#include <cstring>
+#include <stddef.h>
+#include <iostream>
 
 typedef unsigned int ima_u32_t;
 typedef unsigned long long ima_u64_t;
@@ -185,60 +98,76 @@ double tenjin_u64_to_f64(uint64_t x) {
     return y;
 }
 
-int ima_parse(struct ima_info *info, const void *data) {
-    const struct caf_header *header = (const struct caf_header *)data;
-    const struct caf_chunk *chunk = (const struct caf_chunk *)&header[1];
-    //const struct caf_audio_description *desc = NULL;
-    //const struct caf_packet_table *pakt = NULL;
-    //const struct ima_block *blocks = NULL;
-    const struct caf_audio_description *desc = nullptr;
-    const struct caf_packet_table *pakt = nullptr;
-    const struct ima_block *blocks = nullptr;
+int test(uint32_t input) {
+//int ima_parse(struct ima_info *info, const void *data) {
+    //const struct caf_header *header = (const struct caf_header *)data;
+    //const struct caf_chunk *chunk = (const struct caf_chunk *)&header[1];
+    ////const struct caf_audio_description *desc = NULL;
+    ////const struct caf_packet_table *pakt = NULL;
+    ////const struct ima_block *blocks = NULL;
+    //const struct caf_audio_description *desc = nullptr;
+    //const struct caf_packet_table *pakt = nullptr;
+    //const struct ima_block *blocks = nullptr;
     
-    ima_s64_t chunk_size;
-    unsigned chunk_type;
-    if (ima_btoh32(header->type) !=
-        ((ima_u32_t)(ima_u8_t)('f') | ((ima_u32_t)(ima_u8_t)('f') << 8) |
-         ((ima_u32_t)(ima_u8_t)('a') << 16) |
-         ((ima_u32_t)(ima_u8_t)('c') << 24)))
-        return -1;
-    if (ima_btoh16(header->version) != 1)
-        return -2;
-    for (;;) {
-        chunk_type = ima_btoh32(chunk->type);
-        chunk_size = ima_btoh64(chunk->size);
-        if (chunk_type ==
-            ((ima_u32_t)(ima_u8_t)('c') | ((ima_u32_t)(ima_u8_t)('s') << 8) |
-             ((ima_u32_t)(ima_u8_t)('e') << 16) |
-             ((ima_u32_t)(ima_u8_t)('d') << 24)))
-            desc = (const struct caf_audio_description *)&chunk[1];
-        else if (chunk_type == ((ima_u32_t)(ima_u8_t)('t') |
-                                ((ima_u32_t)(ima_u8_t)('k') << 8) |
-                                ((ima_u32_t)(ima_u8_t)('a') << 16) |
-                                ((ima_u32_t)(ima_u8_t)('p') << 24)))
-            pakt = (const struct caf_packet_table *)&chunk[1];
-        else if (chunk_type == ((ima_u32_t)(ima_u8_t)('a') |
-                                ((ima_u32_t)(ima_u8_t)('t') << 8) |
-                                ((ima_u32_t)(ima_u8_t)('a') << 16) |
-                                ((ima_u32_t)(ima_u8_t)('d') << 24))) {
-            blocks = (const struct ima_block *)&(
-                (const struct caf_data *)&chunk[1])[1];
-            break;
-        }
-        chunk = (const struct caf_chunk *)((const ima_u8_t *)&chunk[1] +
-                                           chunk_size);
+    //ima_s64_t chunk_size;
+    //unsigned chunk_type;
+    //if (ima_btoh32(header->type) !=
+        //((ima_u32_t)(ima_u8_t)('f') | ((ima_u32_t)(ima_u8_t)('f') << 8) |
+         //((ima_u32_t)(ima_u8_t)('a') << 16) |
+         //((ima_u32_t)(ima_u8_t)('c') << 24)))
+        //return -1;
+    //if (ima_btoh16(header->version) != 1)
+        //return -2;
+    //for (;;) {
+        //chunk_type = ima_btoh32(chunk->type);
+        //chunk_size = ima_btoh64(chunk->size);
+        //if (chunk_type ==
+            //((ima_u32_t)(ima_u8_t)('c') | ((ima_u32_t)(ima_u8_t)('s') << 8) |
+             //((ima_u32_t)(ima_u8_t)('e') << 16) |
+             //((ima_u32_t)(ima_u8_t)('d') << 24)))
+            //desc = (const struct caf_audio_description *)&chunk[1];
+        //else if (chunk_type == ((ima_u32_t)(ima_u8_t)('t') |
+                                //((ima_u32_t)(ima_u8_t)('k') << 8) |
+                                //((ima_u32_t)(ima_u8_t)('a') << 16) |
+                                //((ima_u32_t)(ima_u8_t)('p') << 24)))
+            //pakt = (const struct caf_packet_table *)&chunk[1];
+        //else if (chunk_type == ((ima_u32_t)(ima_u8_t)('a') |
+                                //((ima_u32_t)(ima_u8_t)('t') << 8) |
+                                //((ima_u32_t)(ima_u8_t)('a') << 16) |
+                                //((ima_u32_t)(ima_u8_t)('d') << 24))) {
+            //blocks = (const struct ima_block *)&(
+                //(const struct caf_data *)&chunk[1])[1];
+            //break;
+        //}
+        //chunk = (const struct caf_chunk *)((const ima_u8_t *)&chunk[1] +
+                                           //chunk_size);
+    //}
+    //if (ima_btoh32(desc->format_id) !=
+        //((ima_u32_t)(ima_u8_t)('4') | ((ima_u32_t)(ima_u8_t)('a') << 8) |
+         //((ima_u32_t)(ima_u8_t)('m') << 16) |
+         //((ima_u32_t)(ima_u8_t)('i') << 24)))
+        //return -3;
+    //info->blocks = blocks;
+    //info->size = chunk_size;
+    //info->frame_count = ima_btoh64(pakt->frame_count);
+    //info->channel_count = ima_btoh32(desc->channels_per_frame);
+    //conv64.u = desc->sample_rate;
+    uint64_t __tenjin_tmp_in_conv64 = input;
+    __tenjin_tmp_in_conv64 = ima_btoh64(*(const ima_u64_t *)&__tenjin_tmp_in_conv64);
+    double __tenjin_tmp_out_conv64 = tenjin_u64_to_f64(__tenjin_tmp_in_conv64);
+    //info->sample_rate = conv64.f;
+    //return 0;
+    return __tenjin_tmp_out_conv64;
+}
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <float>" << std::endl;
+        return 1;
     }
-    if (ima_btoh32(desc->format_id) !=
-        ((ima_u32_t)(ima_u8_t)('4') | ((ima_u32_t)(ima_u8_t)('a') << 8) |
-         ((ima_u32_t)(ima_u8_t)('m') << 16) |
-         ((ima_u32_t)(ima_u8_t)('i') << 24)))
-        return -3;
-    info->blocks = blocks;
-    info->size = chunk_size;
-    info->frame_count = ima_btoh64(pakt->frame_count);
-    info->channel_count = ima_btoh32(desc->channels_per_frame);
-    uint64_t __tenjin_tmp_conv64 = desc->sample_rate;
-    __tenjin_tmp_conv64 = ima_btoh64(*(const ima_u64_t *)&__tenjin_tmp_conv64);
-    info->sample_rate = tenjin_u64_to_f64(__tenjin_tmp_conv64);
+
+    float input = std::stof(argv[1]);
+    std::cout << test((uint32_t)input) << std::endl;
+
     return 0;
 }

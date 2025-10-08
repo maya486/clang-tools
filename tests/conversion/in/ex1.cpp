@@ -1,4 +1,5 @@
 #include "stdint.h"
+#include <iostream>
 
 static uint32_t m__mantissa[2048] = {
     0x00000000, 0x33800000, 0x34000000, 0x34400000, 0x34800000, 0x34a00000,
@@ -365,7 +366,7 @@ static uint32_t m__exponent[64] = {
     0x8b000000, 0x8b800000, 0x8c000000, 0x8c800000, 0x8d000000, 0x8d800000,
     0x8e000000, 0x8e800000, 0x8f000000, 0xc7800000};
 
-float half2float(uint16_t h) {
+float test(uint16_t h) {
     union {
         float flt;
         uint32_t num;
@@ -373,4 +374,16 @@ float half2float(uint16_t h) {
     int n = h >> 10;
     out.num = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n];
     return out.flt;
+}
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <float>" << std::endl;
+        return 1;
+    }
+
+    float input = std::stof(argv[1]);
+    std::cout << test((uint16_t)input) << std::endl;
+
+    return 0;
 }
