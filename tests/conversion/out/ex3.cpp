@@ -1,3 +1,49 @@
+[Debug] Traversing Function Body for union accesses
+[Debug] Visiting MemberExpr: flt
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: in
+[Debug] Access type: write
+[Debug] Visiting MemberExpr: num
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: in
+[Debug] Access type: read
+[Debug] Done traversing Function Body for union accesses
+  Variable: in (2 accesses)
+    Field: flt | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex3.cpp:113
+    Field: num | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex3.cpp:114
+[Debug] counts: writes_a=1 reads_a=0 writes_b=0 reads_b=1
+[Debug] Found enclosing CompoundStmt for: in.flt
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex3.cpp:108:5) in;
+    uint32_t n, j;
+    in.flt = flt;
+    n = in.num;
+    j = (n >> 23) & 511;
+    return (uint16_t)((uint32_t)m__base[j] + ((n & 8388607) >> m__shift[j]));
+}
+
+=== Parent Chain ===
+[Debug] Found enclosing CompoundStmt for: in.num
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex3.cpp:108:5) in;
+    uint32_t n, j;
+    in.flt = flt;
+    n = in.num;
+    j = (n >> 23) & 511;
+    return (uint16_t)((uint32_t)m__base[j] + ((n & 8388607) >> m__shift[j]));
+}
+
+=== Parent Chain ===
+Rewrote union pun for variable 'in' using tenjin_float_to_uint32_t with tmps __tenjin_tmp_in_in __tenjin_tmp_out_in
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+=== Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/ex3.cpp ===
 #include <cstring>
 #include <stdint.h>
 #include <iostream>
@@ -105,17 +151,16 @@ static uint8_t m__shift[512] = {
     0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
     0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x0d};
 
-uint32_t tenjin_f32_to_u32(float x) {
-    uint32_t y;
-    memcpy(&y, &x, sizeof y);
-    return y;
+void tenjin_float_to_uint32_t(float x, uint32_t *out) {
+    memcpy(out, &x, 4);
 }
 
 uint16_t test(float flt) {
     
     uint32_t n, j;
     float __tenjin_tmp_in_in = flt;
-    uint32_t __tenjin_tmp_out_in = tenjin_f32_to_u32(__tenjin_tmp_in_in);
+    uint32_t __tenjin_tmp_out_in;
+    tenjin_float_to_uint32_t(__tenjin_tmp_in_in, &__tenjin_tmp_out_in);
     n = __tenjin_tmp_out_in;
     j = (n >> 23) & 0x1ff;
     return (uint16_t)((uint32_t)m__base[j] + ((n & 0x007fffff) >> m__shift[j]));

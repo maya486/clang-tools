@@ -11,6 +11,7 @@
 #include "llvm/Support/CommandLine.h"
 
 #include <algorithm>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,7 @@ using namespace llvm;
 using namespace clang;
 using namespace clang::ast_matchers;
 
-static constexpr bool VERBOSE = false;
+static constexpr bool VERBOSE = true;
 
 struct TransformationLog {
     bool foundUnion = false;
@@ -30,9 +31,8 @@ static TransformationLog gLog;
 
 DeclarationMatcher FunctionMatcher = functionDecl(isDefinition()).bind("funcDecl");
 
-static bool isIntFloatSizedTwoFieldUnion(const RecordDecl *RD, ASTContext &Ctx,
-                                         const FieldDecl *&out_int_field,
-                                         const FieldDecl *&out_float_field) {
+static bool isValidUnion(const RecordDecl *RD, ASTContext &Ctx, const FieldDecl *&out_a_field,
+                         const FieldDecl *&out_b_field, int& num_bytes) {
     if (VERBOSE)
         llvm::outs() << "[Debug] Checking Union\n";
     if (!RD || !RD->isUnion() || !RD->isCompleteDefinition()) {
@@ -41,9 +41,9 @@ static bool isIntFloatSizedTwoFieldUnion(const RecordDecl *RD, ASTContext &Ctx,
         return false;
     }
 
-    const FieldDecl *int_field = nullptr;
-    const FieldDecl *float_field = nullptr;
-    uint64_t int_width = 0, float_width = 0;
+    const FieldDecl *a_field = nullptr;
+    const FieldDecl *b_field = nullptr;
+    uint64_t a_width = 0, b_width = 0;
     int num_fields = 0;
     if (VERBOSE)
         llvm::outs() << "[Debug] Union a\n";
@@ -52,46 +52,71 @@ static bool isIntFloatSizedTwoFieldUnion(const RecordDecl *RD, ASTContext &Ctx,
         ++num_fields;
         QualType QT = FD->getType();
         QualType canon = Ctx.getCanonicalType(QT.getUnqualifiedType());
-        if (canon->isFloatingType()) {
-            float_field = FD;
-            float_width = Ctx.getTypeSize(canon);
-        } else if (canon->isIntegerType()) {
-            int_field = FD;
-            int_width = Ctx.getTypeSize(canon);
-        } else {
-            if (VERBOSE)
-                llvm::outs() << "[Debug] Union has invalid type\n";
-            return false;
+        if (a_field == nullptr) {
+            a_field = FD;
+            a_width = Ctx.getTypeSize(canon);
+        } else if (a_field != nullptr && b_field == nullptr) {
+            b_field = FD;
+            b_width = Ctx.getTypeSize(canon);
         }
+        // if (canon->isFloatingType()) {
+        // float_field = FD;
+        // float_width = Ctx.getTypeSize(canon);
+        //} else if (canon->isIntegerType()) {
+        // int_field = FD;
+        // int_width = Ctx.getTypeSize(canon);
+        //} else {
+        // if (VERBOSE)
+        // llvm::outs() << "[Debug] Union has invalid type\n";
+        // return false;
+        //}
     }
 
-    if (VERBOSE)
-        llvm::outs() << "[Debug] Union b\n";
-
-    if (num_fields != 2 || int_field == nullptr || float_field == nullptr) {
+    if (num_fields != 2 || a_field == nullptr || b_field == nullptr) {
         if (VERBOSE)
-            llvm::outs() << "[Debug] Union does not have 2 fields, 1 int, 1 float\n";
+            llvm::outs() << "[Debug] Union does not have 2 fields\n";
         return false;
     }
 
-    if (int_width != float_width) {
+    if (b_width != a_width) {
         if (VERBOSE)
-            llvm::outs() << "[Debug] Union does not have int and float field same width\n";
+            llvm::outs() << "[Debug] Union fields do not have same width\n";
         return false;
     }
 
-    if (VERBOSE)
-        llvm::outs() << "[Debug] Union c\n";
-    out_int_field = int_field;
-    out_float_field = float_field;
+    num_bytes = a_width / 8; // convert from bits to bytes
+    out_a_field = a_field;
+    out_b_field = b_field;
     gLog.foundUnion = true;
     return true;
 }
 
+struct UnionInfo {
+    const VarDecl *var_decl;
+    const FieldDecl *a_field;
+    const FieldDecl *b_field;
+    const int num_bytes;
+
+    // need because is key of hash map
+    bool operator==(const UnionInfo &other) const {
+        return var_decl == other.var_decl && a_field == other.a_field && b_field == other.b_field && num_bytes == other.num_bytes;
+    }
+    // Needed for std::map
+    bool operator<(const UnionInfo &other) const {
+        if (var_decl != other.var_decl)
+            return var_decl < other.var_decl;
+        if (a_field != other.a_field)
+            return a_field < other.a_field;
+        if (b_field != other.b_field)
+            return b_field < other.b_field;
+        return num_bytes < other.num_bytes;
+    }
+};
+
 struct AccessRec {
     const FieldDecl *field;
     SourceLocation loc;
-    bool isWrite;
+    bool is_write;
     const MemberExpr *expr;
 };
 
@@ -127,15 +152,16 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
             else if (VERBOSE)
                 llvm::outs() << "(anonymous)\n";
 
-        const FieldDecl *int_field = nullptr, *float_field = nullptr;
-        if (!isIntFloatSizedTwoFieldUnion(parentRD, Ctx, int_field, float_field)) {
+        const FieldDecl *a_field = nullptr, *b_field = nullptr;
+        int num_bytes;
+        if (!isValidUnion(parentRD, Ctx, a_field, b_field, num_bytes)) {
             if (VERBOSE)
-                llvm::outs() << "[Debug] Union failed int/float sized check\n";
+                llvm::outs() << "[Debug] Union failed 2 fields, same size check\n";
             return true;
         }
 
         if (VERBOSE)
-            llvm::outs() << "[Debug] Union passed int/float sized check\n";
+            llvm::outs() << "[Debug] Union passed 2 fields, same size check\n";
 
         const Expr *base = ME->getBase()->IgnoreParenImpCasts();
         const VarDecl *ownerVar = nullptr;
@@ -157,30 +183,32 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
         if (VERBOSE)
             llvm::outs() << "[Debug] Owner variable: " << ownerVar->getNameAsString() << "\n";
 
-        bool isWrite = false;
+        bool is_write = false;
         auto parents = Ctx.getParents(*ME);
         if (!parents.empty()) {
             const Stmt *P = parents[0].get<Stmt>();
             if (const BinaryOperator *BO = dyn_cast_or_null<BinaryOperator>(P)) {
                 if ((BO->isAssignmentOp() || BO->isCompoundAssignmentOp()) &&
                     BO->getLHS() == ME) // if on LHS is write
-                    isWrite = true;
+                    is_write = true;
             } else if (const UnaryOperator *UO = dyn_cast_or_null<UnaryOperator>(P)) {
                 if (UO->isIncrementDecrementOp()) // if is -- or ++ is also a write
-                    isWrite = true;
+                    is_write = true;
             }
         }
 
         if (VERBOSE)
-            llvm::outs() << "[Debug] Access type: " << (isWrite ? "write" : "read") << "\n";
+            llvm::outs() << "[Debug] Access type: " << (is_write ? "write" : "read") << "\n";
 
-        AccessRec ar = {FD, ME->getExprLoc(), isWrite, ME};
-        accesses[ownerVar].push_back(ar);
+        AccessRec ar = {FD, ME->getExprLoc(), is_write, ME};
+        UnionInfo ui = {ownerVar, a_field, b_field, num_bytes};
+        accesses[ui].push_back(ar);
         return true;
     }
 
   public:
-    llvm::DenseMap<const VarDecl *, std::vector<AccessRec>> accesses;
+    // llvm::DenseMap<UnionInfo, std::vector<AccessRec>> accesses;
+    std::map<UnionInfo, std::vector<AccessRec>> accesses;
 
   private:
     ASTContext &Ctx;
@@ -264,54 +292,182 @@ template <typename T> const T *findEnclosingStmt(const Expr *E, ASTContext &Ctx)
     return nullptr;
 }
 
-std::string typeToStr(QualType QT, ASTContext &Ctx) {
-    uint64_t size = Ctx.getTypeSize(QT); // in bits
-    if (QT->isFloatingType()) {
-        return (size == 32) ? "f32" : "f64";
-    } else if (QT->isIntegerType()) {
-        return (QT->isUnsignedIntegerType() ? "u" : "i") + std::to_string(size);
+// std::string typeToStr(QualType QT, ASTContext &Ctx) {
+// uint64_t size = Ctx.getTypeSize(QT); // in bits
+// if (QT->isFloatingType()) {
+// return (size == 32) ? "f32" : "f64";
+//} else if (QT->isIntegerType()) {
+// return (QT->isUnsignedIntegerType() ? "u" : "i") + std::to_string(size);
+//}
+// return "";
+//}
+//
+
+std::string sanitizeTypes(const std::string &typeName) {
+    std::string result;
+    for (char c : typeName) {
+        if (std::isalnum(c) || c == '_') {
+            result += c;
+        } else if (c == '[' || c == ']') {
+            result += '_';
+        } else if (c == ' ') {
+            result += '_';
+        }
+        // Else, skip other punctuation like '*', '&', etc. or handle specially if needed
     }
-    return "";
+    return result;
+}
+
+std::string getTagDeclName(QualType QT) {
+    if (const TagDecl *TD = QT->getAsTagDecl()) {
+        if (IdentifierInfo *ID = TD->getIdentifier())
+            return ID->getName().str();
+    }
+    return QT.getAsString(); // fallback
 }
 
 std::string generateFuncName(QualType srcType, QualType dstType, ASTContext &Ctx) {
-    std::string srcStr = typeToStr(srcType, Ctx);
-    std::string dstStr = typeToStr(dstType, Ctx);
-    if (srcStr.empty() || dstStr.empty())
-        return "";
-    return "tenjin_" + srcStr + "_to_" + dstStr;
+    // std::string srcStr = Ctx.getTypeDeclType(srcType->getAsTagDecl()).getAsString();
+    // std::string dstStr = Ctx.getTypeDeclType(dstType->getAsTagDecl()).getAsString();
+    std::string srcStr = getTagDeclName(srcType);
+    std::string dstStr = getTagDeclName(dstType);
+    return sanitizeTypes("tenjin_" + srcStr + "_to_" + dstStr);
 }
 
-std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx) {
+std::string generateUnionConversionFunction(
+    QualType srcType,
+    QualType dstType,
+    ASTContext &Ctx,
+    int copySizeBytes)
+{
     std::string funcName = generateFuncName(srcType, dstType, Ctx);
     if (funcName.empty())
         return "";
 
-    uint64_t srcSize = Ctx.getTypeSize(srcType);
-    uint64_t dstSize = Ctx.getTypeSize(dstType);
-    if (srcSize != dstSize)
-        return "";
+    // --- Handle arrays properly ---
+    auto asArray = [&](QualType T) -> const clang::ArrayType* {
+        return Ctx.getAsArrayType(T);
+    };
 
-    std::string srcC, dstC;
-    if (srcType->isFloatingType())
-        srcC = (srcSize == 32) ? "float" : "double";
-    else
-        srcC = (srcType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(srcSize) + "_t";
+    const clang::ArrayType *srcArr = asArray(srcType);
+    const clang::ArrayType *dstArr = asArray(dstType);
 
-    if (dstType->isFloatingType())
-        dstC = (dstSize == 32) ? "float" : "double";
-    else
-        dstC = (dstType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(dstSize) + "_t";
+    QualType elemSrc = srcArr ? srcArr->getElementType() : srcType;
+    QualType elemDst = dstArr ? dstArr->getElementType() : dstType;
 
+    std::string elemSrcStr = getTagDeclName(elemSrc);
+    std::string elemDstStr = getTagDeclName(elemDst);
+    if (elemSrcStr.empty()) elemSrcStr = elemSrc.getAsString();
+    if (elemDstStr.empty()) elemDstStr = elemDst.getAsString();
+
+    // --- Parameter handling ---
+    bool srcWasArray = (srcArr != nullptr);
+    std::string srcParam;
+    std::string memcpySrcExpr;
+    if (srcWasArray) {
+        srcParam = elemSrcStr + " *x";
+        memcpySrcExpr = "x";
+    } else {
+        srcParam = elemSrcStr + " x";
+        memcpySrcExpr = "&x";
+    }
+
+    std::string dstParam = elemDstStr + " *out";
+
+    // --- Emit code ---
     std::string code;
-    code += dstC + " " + funcName + "(" + srcC + " x) {\n";
-    code += "    " + dstC + " y;\n";
-    code += "    memcpy(&y, &x, sizeof y);\n";
-    code += "    return y;\n";
+    code += "void " + funcName + "(" + srcParam + ", " + dstParam + ") {\n";
+    code += "    memcpy(out, " + memcpySrcExpr + ", " + std::to_string(copySizeBytes) + ");\n";
     code += "}\n";
 
     return code;
 }
+
+//std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx) {
+    //std::string funcName = generateFuncName(srcType, dstType, Ctx);
+    //if (funcName.empty())
+        //return "";
+
+    //uint64_t srcSize = Ctx.getTypeSize(srcType);
+    //uint64_t dstSize = Ctx.getTypeSize(dstType);
+    //if (srcSize != dstSize)
+        //return ""; // must be same size
+
+    //std::string srcStr = getTagDeclName(srcType);
+    //std::string dstStr = getTagDeclName(dstType);
+
+    //if (srcStr.empty())
+        //srcStr = srcType.getAsString();
+    //if (dstStr.empty())
+        //dstStr = dstType.getAsString();
+
+    //std::string code;
+    //// new: void-returning function that writes to a pointer to dst
+    //code += "void " + funcName + "(" + srcStr + " x, " + dstStr + " *out) {\n";
+    //code += "    static_assert(sizeof(x) == sizeof(*out), \"Mismatched sizes\");\n";
+    //code += "    memcpy(out, &x, sizeof(*out));\n";
+    //code += "}\n";
+
+    //return code;
+//}
+
+// std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx)
+// { std::string funcName = generateFuncName(srcType, dstType, Ctx); if (funcName.empty()) return
+// "";
+
+// uint64_t srcSize = Ctx.getTypeSize(srcType);
+// uint64_t dstSize = Ctx.getTypeSize(dstType);
+// if (srcSize != dstSize)
+// return "";  // must be same size
+
+////std::string srcStr = Ctx.getTypeDeclType(srcType->getAsTagDecl()).getAsString();
+////std::string dstStr = Ctx.getTypeDeclType(dstType->getAsTagDecl()).getAsString();
+// std::string srcStr = getTagDeclName(srcType);
+// std::string dstStr = getTagDeclName(dstType);
+
+// if (srcStr.empty()) srcStr = srcType.getAsString();
+// if (dstStr.empty()) dstStr = dstType.getAsString();
+
+// std::string code;
+// code += dstStr + " " + funcName + "(" + srcStr + " x) {\n";
+// code += "    " + dstStr + " y;\n";
+// code += "    static_assert(sizeof(x) == sizeof(y), \"Mismatched sizes\");\n";
+// code += "    memcpy(&y, &x, sizeof(y));\n";
+// code += "    return y;\n";
+// code += "}\n";
+
+// return code;
+//}
+
+// std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx)
+// { std::string funcName = generateFuncName(srcType, dstType, Ctx); if (funcName.empty()) return
+// "";
+
+// uint64_t srcSize = Ctx.getTypeSize(srcType);
+// uint64_t dstSize = Ctx.getTypeSize(dstType);
+// if (srcSize != dstSize)
+// return "";
+
+// std::string srcC, dstC;
+// if (srcType->isFloatingType())
+// srcC = (srcSize == 32) ? "float" : "double";
+// else
+// srcC = (srcType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(srcSize) + "_t";
+
+// if (dstType->isFloatingType())
+// dstC = (dstSize == 32) ? "float" : "double";
+// else
+// dstC = (dstType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(dstSize) + "_t";
+
+// std::string code;
+// code += dstC + " " + funcName + "(" + srcC + " x) {\n";
+// code += "    " + dstC + " y;\n";
+// code += "    memcpy(&y, &x, sizeof y);\n";
+// code += "    return y;\n";
+// code += "}\n";
+
+// return code;
+//}
 
 class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
   public:
@@ -348,49 +504,47 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             llvm::outs() << "[Debug] Done traversing Function Body for union accesses\n";
     }
 
-    void handleVariableAccess(const FunctionDecl *FD, const VarDecl *VD, std::vector<AccessRec> seq,
+    void handleVariableAccess(const FunctionDecl *FD, UnionInfo UI, std::vector<AccessRec> seq,
                               ASTContext &Ctx) {
         if (seq.empty())
             return;
 
-        printAccesses(VD, seq, Ctx);
+        printAccesses(UI.var_decl, seq, Ctx);
         std::sort(seq.begin(), seq.end(), [&Ctx](const AccessRec &A, const AccessRec &B) {
             return compareBySource(A, B, Ctx);
         });
 
-        unsigned writes_f, reads_f, writes_i, reads_i;
-        const FieldDecl *floatField = nullptr, *intField = nullptr;
-        countFieldAccesses(seq, writes_f, reads_f, writes_i, reads_i, floatField, intField);
+        unsigned writes_a, reads_a, writes_b, reads_b;
+        countFieldAccesses(seq, writes_a, reads_a, writes_b, reads_b, UI.a_field, UI.b_field);
 
-        bool tryFloatToInt = (reads_i >= 1 && writes_i == 0 && (writes_f + reads_f > 0));
-        bool tryIntToFloat = (reads_f >= 1 && writes_f == 0 && (writes_i + reads_i > 0));
-        if (!tryFloatToInt && !tryIntToFloat) {
+        bool try_a_to_b = (reads_b >= 1 && writes_b == 0 && (writes_a + reads_a > 0));
+        bool try_b_to_a = (reads_a >= 1 && writes_a == 0 && (writes_b + reads_b > 0));
+        if (!try_a_to_b && !try_b_to_a) {
             if (VERBOSE)
                 llvm::outs() << "[Debug] Not a supported access pattern; skipping\n";
             return;
         }
 
-        const FieldDecl *srcField = tryFloatToInt ? floatField : intField;
-        const FieldDecl *dstField = tryFloatToInt ? intField : floatField;
-        bool srcIsFloat = tryFloatToInt;
+        const FieldDecl *src_field = try_a_to_b ? UI.a_field : UI.b_field;
+        const FieldDecl *dst_field = try_a_to_b ? UI.b_field : UI.a_field;
 
-        if (!validateAccessSequence(seq, srcField, dstField, Ctx))
+        if (!validateAccessSequence(seq, src_field, dst_field, Ctx))
             return;
 
         SourceManager &SM = Ctx.getSourceManager();
         LangOptions LO = Ctx.getLangOpts();
 
-        std::string srcC = getTypeString(srcField->getType(), Ctx);
-        std::string funcName = generateFuncName(srcField->getType(), dstField->getType(), Ctx);
+        std::string srcC = getTypeString(src_field->getType(), Ctx);
+        std::string funcName = generateFuncName(src_field->getType(), dst_field->getType(), Ctx);
         std::string funcCode =
-            generateUnionConversionFunction(srcField->getType(), dstField->getType(), Ctx);
+            generateUnionConversionFunction(src_field->getType(), dst_field->getType(), Ctx, UI.num_bytes);
         if (funcName.empty() || funcCode.empty()) {
             if (VERBOSE)
                 llvm::outs() << "[Debug] Could not generate conversion function; skipping\n";
             return;
         }
 
-        applyEdits(FD, VD, seq, srcField, dstField, srcC, funcName, funcCode, Ctx);
+        applyEdits(FD, UI.var_decl, seq, src_field, dst_field, srcC, funcName, funcCode, Ctx);
     }
 
     void printAccesses(const VarDecl *VD, const std::vector<AccessRec> &seq, ASTContext &Ctx) {
@@ -405,7 +559,7 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
                     : "<unknown>";
             if (VERBOSE)
                 llvm::outs() << "    Field: " << a.field->getNameAsString() << " | "
-                             << (a.isWrite ? "WRITE" : "READ") << " | at " << locStr << "\n";
+                             << (a.is_write ? "WRITE" : "READ") << " | at " << locStr << "\n";
         }
     }
 
@@ -416,33 +570,46 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         return SM.getFileOffset(A.loc) < SM.getFileOffset(B.loc);
     }
 
-    void countFieldAccesses(const std::vector<AccessRec> &seq, unsigned &writes_f,
-                            unsigned &reads_f, unsigned &writes_i, unsigned &reads_i,
-                            const FieldDecl *&floatField, const FieldDecl *&intField) {
-        writes_f = reads_f = writes_i = reads_i = 0;
-        for (const auto &a : seq) {
-            QualType ft = a.field->getType();
-            if (ft->isFloatingType())
-                floatField = a.field;
-            else if (ft->isIntegerType())
-                intField = a.field;
-
-            if (ft->isFloatingType()) {
-                if (a.isWrite)
-                    ++writes_f;
-                else
-                    ++reads_f;
-            } else if (ft->isIntegerType()) {
-                if (a.isWrite)
-                    ++writes_i;
-                else
-                    ++reads_i;
+    void countFieldAccesses(const std::vector<AccessRec> &seq, unsigned &writes_a,
+                            unsigned &reads_a, unsigned &writes_b, unsigned &reads_b,
+                            const FieldDecl *&a_field, const FieldDecl *&b_field) {
+        writes_a = reads_a = writes_b = reads_b = 0;
+        for (const auto &access : seq) {
+            if (access.field == a_field) {
+                if (access.is_write) {
+                    ++writes_a;
+                } else {
+                    ++reads_a;
+                }
+            } else if (access.field == b_field) {
+                if (access.is_write) {
+                    ++writes_b;
+                } else {
+                    ++reads_b;
+                }
             }
+            // QualType ft = a.field->getType();
+            // if (ft->isFloatingType())
+            // a_field = a.field;
+            // else if (ft->isIntegerType())
+            // b_field = a.field;
+
+            // if (ft->isFloatingType()) {
+            // if (a.is_write)
+            //++writes_a;
+            // else
+            //++reads_a;
+            //} else if (ft->isIntegerType()) {
+            // if (a.is_write)
+            //++writes_b;
+            // else
+            //++reads_b;
+            //}
         }
 
         if (VERBOSE)
-            llvm::outs() << "[Debug] counts: writes_f=" << writes_f << " reads_f=" << reads_f
-                         << " writes_i=" << writes_i << " reads_i=" << reads_i << "\n";
+            llvm::outs() << "[Debug] counts: writes_a=" << writes_a << " reads_a=" << reads_a
+                         << " writes_b=" << writes_b << " reads_b=" << reads_b << "\n";
     }
 
     void printExprAndCompoundStmt(const Expr *E, const ASTContext &Ctx, const CompoundStmt *C) {
@@ -469,8 +636,8 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         }
     }
 
-    bool validateAccessSequence(const std::vector<AccessRec> &seq, const FieldDecl *srcField,
-                                const FieldDecl *dstField, ASTContext &Ctx) {
+    bool validateAccessSequence(const std::vector<AccessRec> &seq, const FieldDecl *src_field,
+                                const FieldDecl *dst_field, ASTContext &Ctx) {
         const CompoundStmt *enclosingCompound = nullptr;
         for (const auto &a : seq) {
             const CompoundStmt *C = findEnclosingStmt<CompoundStmt>(a.expr, Ctx);
@@ -488,7 +655,7 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
 
         bool anyDstWrites = false;
         for (const auto &a : seq)
-            if (a.field == dstField && a.isWrite)
+            if (a.field == dst_field && a.is_write)
                 anyDstWrites = true;
         if (anyDstWrites) {
             if (VERBOSE)
@@ -498,9 +665,9 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
 
         bool foundSrcWriteBeforeDstRead = false;
         for (size_t i = 0; i < seq.size(); ++i) {
-            if (seq[i].field == dstField && !seq[i].isWrite) {
+            if (seq[i].field == dst_field && !seq[i].is_write) {
                 for (size_t j = 0; j < i; ++j)
-                    if (seq[j].field == srcField && seq[j].isWrite)
+                    if (seq[j].field == src_field && seq[j].is_write)
                         foundSrcWriteBeforeDstRead = true;
                 break;
             }
@@ -524,7 +691,7 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
     }
 
     void applyEdits(const FunctionDecl *FD, const VarDecl *VD, const std::vector<AccessRec> &seq,
-                    const FieldDecl *srcField, const FieldDecl *dstField, const std::string &srcC,
+                    const FieldDecl *src_field, const FieldDecl *dst_field, const std::string &srcC,
                     const std::string &funcName, const std::string &funcCode, ASTContext &Ctx) {
         SourceManager &SM = Ctx.getSourceManager();
         LangOptions LO = Ctx.getLangOpts();
@@ -543,9 +710,10 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         edits.push_back({SM.getFileOffset(start), start, end, ""});
 
         // === First write: used for temp input assignment ===
-        auto firstSrcWriteIt = std::find_if(seq.begin(), seq.end(), [srcField](const AccessRec &a) {
-            return a.field == srcField && a.isWrite;
-        });
+        auto firstSrcWriteIt =
+            std::find_if(seq.begin(), seq.end(), [src_field](const AccessRec &a) {
+                return a.field == src_field && a.is_write;
+            });
         if (firstSrcWriteIt == seq.end())
             return;
         const AccessRec &firstSrcWrite = *firstSrcWriteIt;
@@ -562,15 +730,15 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             Lexer::getSourceText(CharSourceRange::getTokenRange(rhs->getSourceRange()), SM, LO)
                 .str();
         edits.push_back({SM.getFileOffset(assignStart), assignStart, assignEnd,
-                         srcC + " " + tmp_in_name + " = " + rhsText });
+                         srcC + " " + tmp_in_name + " = " + rhsText});
 
         unsigned assignStartOff = SM.getFileOffset(assignStart);
         unsigned assignEndOff = SM.getFileOffset(assignEnd);
 
         // === Last write: location to insert the output conversion ===
         auto lastSrcWriteIt =
-            std::find_if(seq.rbegin(), seq.rend(), [srcField](const AccessRec &a) {
-                return a.field == srcField && a.isWrite;
+            std::find_if(seq.rbegin(), seq.rend(), [src_field](const AccessRec &a) {
+                return a.field == src_field && a.is_write;
             });
         if (lastSrcWriteIt == seq.rend())
             return;
@@ -604,10 +772,50 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         }
 
         // Step 4: Insert text with indentation
-        std::string dstC = getTypeString(dstField->getType(), Ctx);
-        std::string finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + " = " +
-                                  funcName + "(" + tmp_in_name + ");";
+        //std::string dstC = getTypeString(dst_field->getType(), Ctx);
+        //std::string dstC = getTagDeclName(dst_field->getType());
+        // std::string finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + " = " +
+        // funcName + "(" + tmp_in_name + ");";
+        // TheRewriter.InsertTextAfterToken(afterStmtLoc, finalInsert);
+        //  declare tmp_out, then call conversion that writes through pointer
+        //std::string finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + ";\n" +
+                                  //indentation + funcName + "(" + tmp_in_name + ", &" +
+                                  //tmp_out_name + ");";
+        QualType dstQT = dst_field->getType();
+        const clang::ArrayType *dstArr = Ctx.getAsArrayType(dstQT);
+
+        // Determine element type (if array) or full type (if not)
+        clang::QualType elemDstQT = dstArr ? dstArr->getElementType() : dstQT;
+        std::string elemDstStr = getTagDeclName(elemDstQT);
+        if (elemDstStr.empty())
+            elemDstStr = elemDstQT.getAsString();
+
+        // Original dstC (fallback for non-array)
+        std::string dstC = getTagDeclName(dst_field->getType());
+        if (dstC.empty())
+            dstC = dst_field->getType().getAsString();
+
+        // Build finalInsert depending on whether destination is an array
+        std::string finalInsert;
+        if (dstArr) {
+            // Prefer constant array size if available
+            if (const clang::ConstantArrayType *constArr = llvm::dyn_cast<clang::ConstantArrayType>(dstArr)) {
+                uint64_t arraySize = constArr->getSize().getZExtValue();
+                finalInsert = "\n" + indentation + elemDstStr + " " + tmp_out_name + "[" + std::to_string(arraySize) + "];\n" +
+                              indentation + funcName + "(" + tmp_in_name + ", " + tmp_out_name + ");";
+            } else {
+                // Fallback for non-constant arrays: declare as pointer-to-element and pass pointer.
+                // This keeps generated C valid; caller may need to adjust if VLA/unknown size.
+                finalInsert = "\n" + indentation + elemDstStr + " *" + tmp_out_name + ";\n" +
+                              indentation + funcName + "(" + tmp_in_name + ", " + tmp_out_name + ");";
+            }
+        } else {
+            // Non-array destination: keep previous behavior (declare value and pass &tmp)
+            finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + ";\n" +
+                          indentation + funcName + "(" + tmp_in_name + ", &" + tmp_out_name + ");";
+        }
         TheRewriter.InsertTextAfterToken(afterStmtLoc, finalInsert);
+
         // SourceLocation insertAfterWrite = Lexer::findLocationAfterToken(
         // lastWriteStmt->getEndLoc(), tok::semi, SM, LO,
         // [>SkipTrailingWhitespaceAndNewLine=<]true);
@@ -633,9 +841,9 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             if (meOff >= assignStartOff && meOff <= assignEndOff)
                 continue;
 
-            if (a.field == srcField) {
+            if (a.field == src_field) {
                 edits.push_back({meOff, meStart, meEnd, tmp_in_name});
-            } else if (a.field == dstField && !a.isWrite) {
+            } else if (a.field == dst_field && !a.is_write) {
                 edits.push_back({meOff, meStart, meEnd, tmp_out_name});
             }
         }

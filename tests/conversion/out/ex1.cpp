@@ -1,3 +1,45 @@
+[Debug] Traversing Function Body for union accesses
+[Debug] Visiting MemberExpr: num
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: out
+[Debug] Access type: write
+[Debug] Visiting MemberExpr: flt
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: out
+[Debug] Access type: read
+[Debug] Done traversing Function Body for union accesses
+  Variable: out (2 accesses)
+    Field: num | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:375
+    Field: flt | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:376
+[Debug] counts: writes_a=0 reads_a=1 writes_b=1 reads_b=0
+[Debug] Found enclosing CompoundStmt for: out.num
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:370:5) out;
+    int n = h >> 10;
+    out.num = m__mantissa[(h & 1023) + m__offset[n]] + m__exponent[n];
+    return out.flt;
+}
+
+=== Parent Chain ===
+[Debug] Found enclosing CompoundStmt for: out.flt
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp:370:5) out;
+    int n = h >> 10;
+    out.num = m__mantissa[(h & 1023) + m__offset[n]] + m__exponent[n];
+    return out.flt;
+}
+
+=== Parent Chain ===
+Rewrote union pun for variable 'out' using tenjin_uint32_t_to_float with tmps __tenjin_tmp_in_out __tenjin_tmp_out_out
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+=== Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/ex1.cpp ===
 #include <cstring>
 #include "stdint.h"
 #include <iostream>
@@ -367,17 +409,16 @@ static uint32_t m__exponent[64] = {
     0x8b000000, 0x8b800000, 0x8c000000, 0x8c800000, 0x8d000000, 0x8d800000,
     0x8e000000, 0x8e800000, 0x8f000000, 0xc7800000};
 
-float tenjin_u32_to_f32(uint32_t x) {
-    float y;
-    memcpy(&y, &x, sizeof y);
-    return y;
+void tenjin_uint32_t_to_float(uint32_t x, float *out) {
+    memcpy(out, &x, 4);
 }
 
 float test(uint16_t h) {
     
     int n = h >> 10;
     uint32_t __tenjin_tmp_in_out = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n];
-    float __tenjin_tmp_out_out = tenjin_u32_to_f32(__tenjin_tmp_in_out);
+    float __tenjin_tmp_out_out;
+    tenjin_uint32_t_to_float(__tenjin_tmp_in_out, &__tenjin_tmp_out_out);
     return __tenjin_tmp_out_out;
 }
 

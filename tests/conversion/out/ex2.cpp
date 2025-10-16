@@ -1,3 +1,89 @@
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Visiting MemberExpr: u
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: conv64
+[Debug] Access type: write
+[Debug] Visiting MemberExpr: u
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: conv64
+[Debug] Access type: write
+[Debug] Visiting MemberExpr: u
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: conv64
+[Debug] Access type: read
+[Debug] Visiting MemberExpr: f
+[Debug] Parent is union: [Debug] Checking Union
+[Debug] Union a
+[Debug] Union passed 2 fields, same size check
+[Debug] Owner variable: conv64
+[Debug] Access type: read
+[Debug] Done traversing Function Body for union accesses
+  Variable: conv64 (4 accesses)
+    Field: u | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:151
+    Field: u | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:152
+    Field: u | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:152
+    Field: f | READ | at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:155
+[Debug] counts: writes_a=0 reads_a=1 writes_b=2 reads_b=1
+[Debug] Found enclosing CompoundStmt for: conv64.u
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:104:5) conv64;
+    conv64.u = input;
+    conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u);
+    return conv64.f;
+}
+
+=== Parent Chain ===
+[Debug] Found enclosing CompoundStmt for: conv64.u
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:104:5) conv64;
+    conv64.u = input;
+    conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u);
+    return conv64.f;
+}
+
+=== Parent Chain ===
+[Debug] Found enclosing CompoundStmt for: conv64.u
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:104:5) conv64;
+    conv64.u = input;
+    conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u);
+    return conv64.f;
+}
+
+=== Parent Chain ===
+[Debug] Found enclosing CompoundStmt for: conv64.f
+[Debug] CompoundStmt: {
+    union (unnamed union at /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp:104:5) conv64;
+    conv64.u = input;
+    conv64.u = ima_btoh64(*(const ima_u64_t *)&conv64.u);
+    return conv64.f;
+}
+
+=== Parent Chain ===
+Rewrote union pun for variable 'conv64' using tenjin_ima_u64_t_to_ima_f64_t with tmps __tenjin_tmp_in_conv64 __tenjin_tmp_out_conv64
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+[Debug] Traversing Function Body for union accesses
+[Debug] Done traversing Function Body for union accesses
+=== Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/ex2.cpp ===
 #include <cstring>
 #include <stddef.h>
 #include <iostream>
@@ -92,10 +178,8 @@ static ima_u64_t ima_btoh64(ima_u64_t v) {
     return ima_bswap64(v);
 }
 
-double tenjin_u64_to_f64(uint64_t x) {
-    double y;
-    memcpy(&y, &x, sizeof y);
-    return y;
+void tenjin_ima_u64_t_to_ima_f64_t(ima_u64_t x, ima_f64_t *out) {
+    memcpy(out, &x, 8);
 }
 
 int test(uint32_t input) {
@@ -154,7 +238,8 @@ int test(uint32_t input) {
     //conv64.u = desc->sample_rate;
     uint64_t __tenjin_tmp_in_conv64 = input;
     __tenjin_tmp_in_conv64 = ima_btoh64(*(const ima_u64_t *)&__tenjin_tmp_in_conv64);
-    double __tenjin_tmp_out_conv64 = tenjin_u64_to_f64(__tenjin_tmp_in_conv64);
+    ima_f64_t __tenjin_tmp_out_conv64;
+    tenjin_ima_u64_t_to_ima_f64_t(__tenjin_tmp_in_conv64, &__tenjin_tmp_out_conv64);
     //info->sample_rate = conv64.f;
     //return 0;
     return __tenjin_tmp_out_conv64;
