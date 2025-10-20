@@ -1,34 +1,3 @@
-[Debug] Traversing Function Body for union accesses
-[Debug] Visiting MemberExpr: flt
-[Debug] Parent is union: [Debug] Checking Union
-[Debug] Union a
-[Debug] Union passed 2 fields, same size check
-[Debug] Owner variable: in
-[Debug] Access type: write
-[Debug] Visiting MemberExpr: num
-[Debug] Parent is union: [Debug] Checking Union
-[Debug] Union a
-[Debug] Union passed 2 fields, same size check
-[Debug] Owner variable: in
-[Debug] Access type: write
-[Debug] Visiting MemberExpr: flt
-[Debug] Parent is union: [Debug] Checking Union
-[Debug] Union a
-[Debug] Union passed 2 fields, same size check
-[Debug] Owner variable: in
-[Debug] Access type: read
-[Debug] Done traversing Function Body for union accesses
-  Variable: in (3 accesses)
-    Field: flt | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp:10
-    Field: num | WRITE | at /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp:11
-    Field: flt | READ | at /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp:12
-[Debug] counts: writes_a=1 reads_a=1 writes_b=1 reads_b=0
-[Debug] Not a supported access pattern; skipping
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-[Debug] Traversing Function Body for union accesses
-[Debug] Done traversing Function Body for union accesses
-=== Rewritten File: /home/mrebholz/clang-tools/tests/conversion/in/bad1.cpp ===
 #include <stdint.h>
 #include <iostream>
 

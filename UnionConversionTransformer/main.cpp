@@ -20,7 +20,7 @@ using namespace llvm;
 using namespace clang;
 using namespace clang::ast_matchers;
 
-static constexpr bool VERBOSE = true;
+static constexpr bool VERBOSE = false;
 
 struct TransformationLog {
     bool foundUnion = false;
@@ -29,10 +29,90 @@ struct TransformationLog {
 
 static TransformationLog gLog;
 
+static std::map<const RecordDecl *, std::string> UnnamedTypedefMap;
+
 DeclarationMatcher FunctionMatcher = functionDecl(isDefinition()).bind("funcDecl");
 
+template <typename T> const T *findEnclosingStmt(const Decl *D, ASTContext &Ctx) {
+    for (DynTypedNode parentNode : Ctx.getParents(*D)) {
+        if (const Stmt *stmtParent = parentNode.get<Stmt>()) {
+            const T *result = nullptr;
+            const Stmt *current = stmtParent;
+            while (current) {
+                if ((result = dyn_cast<T>(current)))
+                    return result;
+
+                auto grandparents = Ctx.getParents(*current);
+                if (grandparents.empty())
+                    break;
+                current = grandparents[0].get<Stmt>();
+            }
+        }
+    }
+    return nullptr;
+}
+template <typename T> const T *findEnclosingStmt(const Stmt *S, ASTContext &Ctx) {
+    const Stmt *Current = S;
+
+    while (Current) {
+        auto Parents = Ctx.getParents(*Current);
+        if (Parents.empty())
+            break;
+
+        const Stmt *ParentStmt = Parents[0].get<Stmt>();
+        if (!ParentStmt)
+            break;
+
+        if (const T *Target = dyn_cast<T>(ParentStmt))
+            return Target;
+
+        Current = ParentStmt;
+    }
+
+    return nullptr;
+}
+void printParentChain(const Stmt *S, ASTContext &Ctx) {
+    const Stmt *Current = S;
+    llvm::outs() << "=== Parent Chain ===\n";
+    while (Current) {
+        Current->dump();
+        auto Parents = Ctx.getParents(*Current);
+        if (Parents.empty())
+            break;
+        Current = Parents[0].get<Stmt>();
+    }
+}
+template <typename T> const T *findEnclosingStmt(const Expr *E, ASTContext &Ctx) {
+    llvm::SmallVector<clang::DynTypedNode, 8> Worklist;
+
+    // Seed with initial parents
+    for (const DynTypedNode &ParentNode : Ctx.getParents(*E)) {
+        Worklist.push_back(ParentNode);
+    }
+
+    while (!Worklist.empty()) {
+        const DynTypedNode Node = Worklist.pop_back_val();
+
+        if (const Stmt *S = Node.get<Stmt>()) {
+            if (const T *Target = dyn_cast<T>(S))
+                return Target;
+
+            // Push parents of this Stmt
+            for (const DynTypedNode &P : Ctx.getParents(*S))
+                Worklist.push_back(P);
+
+        } else if (const Decl *D = Node.get<Decl>()) {
+            // Decl may be in DeclStmt, which is a Stmt
+            for (const DynTypedNode &P : Ctx.getParents(*D))
+                Worklist.push_back(P);
+        }
+    }
+
+    return nullptr;
+}
+
 static bool isValidUnion(const RecordDecl *RD, ASTContext &Ctx, const FieldDecl *&out_a_field,
-                         const FieldDecl *&out_b_field, int& num_bytes) {
+                         const FieldDecl *&out_b_field, int &num_bytes) {
     if (VERBOSE)
         llvm::outs() << "[Debug] Checking Union\n";
     if (!RD || !RD->isUnion() || !RD->isCompleteDefinition()) {
@@ -99,7 +179,8 @@ struct UnionInfo {
 
     // need because is key of hash map
     bool operator==(const UnionInfo &other) const {
-        return var_decl == other.var_decl && a_field == other.a_field && b_field == other.b_field && num_bytes == other.num_bytes;
+        return var_decl == other.var_decl && a_field == other.a_field && b_field == other.b_field &&
+               num_bytes == other.num_bytes;
     }
     // Needed for std::map
     bool operator<(const UnionInfo &other) const {
@@ -184,18 +265,37 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
             llvm::outs() << "[Debug] Owner variable: " << ownerVar->getNameAsString() << "\n";
 
         bool is_write = false;
-        auto parents = Ctx.getParents(*ME);
-        if (!parents.empty()) {
-            const Stmt *P = parents[0].get<Stmt>();
-            if (const BinaryOperator *BO = dyn_cast_or_null<BinaryOperator>(P)) {
-                if ((BO->isAssignmentOp() || BO->isCompoundAssignmentOp()) &&
-                    BO->getLHS() == ME) // if on LHS is write
+        // auto parents = Ctx.getParents(*ME);
+        // if (!parents.empty()) {
+        // const Stmt *P = parents[0].get<Stmt>();
+        if (const BinaryOperator *BO = findEnclosingStmt<BinaryOperator>(ME, Ctx)) {
+            if ((BO->isAssignmentOp() || BO->isCompoundAssignmentOp())) { // if on LHS is write
+                Expr *lhs = BO->getLHS()->IgnoreParenCasts();
+                if (lhs == ME) {
+                    // if is lhs of an assignment, then is a write
                     is_write = true;
-            } else if (const UnaryOperator *UO = dyn_cast_or_null<UnaryOperator>(P)) {
-                if (UO->isIncrementDecrementOp()) // if is -- or ++ is also a write
-                    is_write = true;
+                } else if (auto *ASE = dyn_cast<ArraySubscriptExpr>(lhs)) {
+                    // Handle member access, like `u.b[...] = ...`
+                    Expr *base = ASE->getBase()->IgnoreParenCasts();
+                    if (base == ME) {
+                        is_write = true;
+                    } else if (auto *ME2 = dyn_cast<MemberExpr>(base)) {
+                        if (ME2->getBase()->IgnoreParenCasts() == ME) {
+                            is_write = true;
+                        }
+                    }
+                } else if (auto *ME2 = dyn_cast<MemberExpr>(lhs)) {
+                    // Handle struct or union member access directly (e.g., `u.b = c`)
+                    if (ME2->getBase()->IgnoreParenCasts() == ME)
+                        is_write = true;
+                }
             }
+            // const CompoundStmt *C = findEnclosingStmt<CompoundStmt>(a.expr, Ctx);
+        } else if (const UnaryOperator *UO = findEnclosingStmt<UnaryOperator>(ME, Ctx)) {
+            if (UO->isIncrementDecrementOp()) // if is -- or ++ is also a write
+                is_write = true;
         }
+        //}
 
         if (VERBOSE)
             llvm::outs() << "[Debug] Access type: " << (is_write ? "write" : "read") << "\n";
@@ -214,84 +314,6 @@ class MemberAccessVisitor : public RecursiveASTVisitor<MemberAccessVisitor> {
     ASTContext &Ctx;
 };
 
-template <typename T> const T *findEnclosingStmt(const Decl *D, ASTContext &Ctx) {
-    for (DynTypedNode parentNode : Ctx.getParents(*D)) {
-        if (const Stmt *stmtParent = parentNode.get<Stmt>()) {
-            const T *result = nullptr;
-            const Stmt *current = stmtParent;
-            while (current) {
-                if ((result = dyn_cast<T>(current)))
-                    return result;
-
-                auto grandparents = Ctx.getParents(*current);
-                if (grandparents.empty())
-                    break;
-                current = grandparents[0].get<Stmt>();
-            }
-        }
-    }
-    return nullptr;
-}
-template <typename T> const T *findEnclosingStmt(const Stmt *S, ASTContext &Ctx) {
-    const Stmt *Current = S;
-
-    while (Current) {
-        auto Parents = Ctx.getParents(*Current);
-        if (Parents.empty())
-            break;
-
-        const Stmt *ParentStmt = Parents[0].get<Stmt>();
-        if (!ParentStmt)
-            break;
-
-        if (const T *Target = dyn_cast<T>(ParentStmt))
-            return Target;
-
-        Current = ParentStmt;
-    }
-
-    return nullptr;
-}
-void printParentChain(const Stmt *S, ASTContext &Ctx) {
-    const Stmt *Current = S;
-    llvm::outs() << "=== Parent Chain ===\n";
-    while (Current) {
-        Current->dump();
-        auto Parents = Ctx.getParents(*Current);
-        if (Parents.empty())
-            break;
-        Current = Parents[0].get<Stmt>();
-    }
-}
-template <typename T> const T *findEnclosingStmt(const Expr *E, ASTContext &Ctx) {
-    llvm::SmallVector<clang::DynTypedNode, 8> Worklist;
-
-    // Seed with initial parents
-    for (const DynTypedNode &ParentNode : Ctx.getParents(*E)) {
-        Worklist.push_back(ParentNode);
-    }
-
-    while (!Worklist.empty()) {
-        const DynTypedNode Node = Worklist.pop_back_val();
-
-        if (const Stmt *S = Node.get<Stmt>()) {
-            if (const T *Target = dyn_cast<T>(S))
-                return Target;
-
-            // Push parents of this Stmt
-            for (const DynTypedNode &P : Ctx.getParents(*S))
-                Worklist.push_back(P);
-
-        } else if (const Decl *D = Node.get<Decl>()) {
-            // Decl may be in DeclStmt, which is a Stmt
-            for (const DynTypedNode &P : Ctx.getParents(*D))
-                Worklist.push_back(P);
-        }
-    }
-
-    return nullptr;
-}
-
 // std::string typeToStr(QualType QT, ASTContext &Ctx) {
 // uint64_t size = Ctx.getTypeSize(QT); // in bits
 // if (QT->isFloatingType()) {
@@ -302,6 +324,38 @@ template <typename T> const T *findEnclosingStmt(const Expr *E, ASTContext &Ctx)
 // return "";
 //}
 //
+//
+
+std::string getOrCreateTypedefName(QualType QT, ASTContext &Ctx) {
+    // Handle array types by getting the element type
+    if (const clang::ArrayType *ArrType = Ctx.getAsArrayType(QT)) {
+        QualType elemType = ArrType->getElementType();
+        return getOrCreateTypedefName(elemType, Ctx);
+    }
+
+    if (const TagDecl *TD = QT->getAsTagDecl()) {
+        // If it has an identifier, use it normally
+        if (IdentifierInfo *ID = TD->getIdentifier()) {
+            return ID->getName().str();
+        }
+
+        // It's unnamed - create a typedef name
+        if (const RecordDecl *RD = dyn_cast<RecordDecl>(TD)) {
+            if (UnnamedTypedefMap.count(RD)) {
+                return UnnamedTypedefMap[RD];
+            }
+
+            // Generate a unique name based on the type and location
+            std::string typeKind = RD->isUnion() ? "union" : "struct";
+            std::string uniqueName =
+                "tenjin_" + typeKind + "_" + std::to_string(reinterpret_cast<uintptr_t>(RD));
+            UnnamedTypedefMap[RD] = uniqueName;
+            return uniqueName;
+        }
+    }
+
+    return QT.getAsString();
+}
 
 std::string sanitizeTypes(const std::string &typeName) {
     std::string result;
@@ -320,34 +374,55 @@ std::string sanitizeTypes(const std::string &typeName) {
 
 std::string getTagDeclName(QualType QT) {
     if (const TagDecl *TD = QT->getAsTagDecl()) {
-        if (IdentifierInfo *ID = TD->getIdentifier())
+        if (IdentifierInfo *ID = TD->getIdentifier()) {
             return ID->getName().str();
+        }
+
+        // Unnamed type - check if we already have a typedef for it
+        if (const RecordDecl *RD_found = dyn_cast<RecordDecl>(TD)) {
+            if (UnnamedTypedefMap.count(RD_found)) {
+                return UnnamedTypedefMap[RD_found];
+            }
+        }
     }
     return QT.getAsString(); // fallback
 }
 
 std::string generateFuncName(QualType srcType, QualType dstType, ASTContext &Ctx) {
-    // std::string srcStr = Ctx.getTypeDeclType(srcType->getAsTagDecl()).getAsString();
-    // std::string dstStr = Ctx.getTypeDeclType(dstType->getAsTagDecl()).getAsString();
-    std::string srcStr = getTagDeclName(srcType);
-    std::string dstStr = getTagDeclName(dstType);
+    std::string srcStr = getOrCreateTypedefName(srcType, Ctx);
+    std::string dstStr = getOrCreateTypedefName(dstType, Ctx);
     return sanitizeTypes("tenjin_" + srcStr + "_to_" + dstStr);
 }
 
-std::string generateUnionConversionFunction(
-    QualType srcType,
-    QualType dstType,
-    ASTContext &Ctx,
-    int copySizeBytes)
-{
+std::string generateTypedefForUnnamedType(QualType QT, ASTContext &Ctx) {
+    if (const TagDecl *TD = QT->getAsTagDecl()) {
+        if (!TD->getIdentifier()) { // Only for unnamed types
+            if (const RecordDecl *RD = dyn_cast<RecordDecl>(TD)) {
+                std::string typedefName = getOrCreateTypedefName(QT, Ctx);
+                std::string typeKind = RD->isUnion() ? "union" : "struct";
+
+                // Reconstruct the type definition
+                std::string typeBody;
+                for (const FieldDecl *FD : RD->fields()) {
+                    QualType FT = FD->getType();
+                    typeBody += "    " + FT.getAsString() + " " + FD->getNameAsString() + ";\n";
+                }
+
+                return "typedef " + typeKind + " {\n" + typeBody + "} " + typedefName + ";\n";
+            }
+        }
+    }
+    return "";
+}
+
+std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx,
+                                            int copySizeBytes) {
     std::string funcName = generateFuncName(srcType, dstType, Ctx);
     if (funcName.empty())
         return "";
 
     // --- Handle arrays properly ---
-    auto asArray = [&](QualType T) -> const clang::ArrayType* {
-        return Ctx.getAsArrayType(T);
-    };
+    auto asArray = [&](QualType T) -> const clang::ArrayType * { return Ctx.getAsArrayType(T); };
 
     const clang::ArrayType *srcArr = asArray(srcType);
     const clang::ArrayType *dstArr = asArray(dstType);
@@ -355,10 +430,12 @@ std::string generateUnionConversionFunction(
     QualType elemSrc = srcArr ? srcArr->getElementType() : srcType;
     QualType elemDst = dstArr ? dstArr->getElementType() : dstType;
 
-    std::string elemSrcStr = getTagDeclName(elemSrc);
-    std::string elemDstStr = getTagDeclName(elemDst);
-    if (elemSrcStr.empty()) elemSrcStr = elemSrc.getAsString();
-    if (elemDstStr.empty()) elemDstStr = elemDst.getAsString();
+    std::string elemSrcStr = getOrCreateTypedefName(elemSrc, Ctx);
+    std::string elemDstStr = getOrCreateTypedefName(elemDst, Ctx);
+    if (elemSrcStr.empty())
+        elemSrcStr = elemSrc.getAsString();
+    if (elemDstStr.empty())
+        elemDstStr = elemDst.getAsString();
 
     // --- Parameter handling ---
     bool srcWasArray = (srcArr != nullptr);
@@ -382,92 +459,6 @@ std::string generateUnionConversionFunction(
 
     return code;
 }
-
-//std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx) {
-    //std::string funcName = generateFuncName(srcType, dstType, Ctx);
-    //if (funcName.empty())
-        //return "";
-
-    //uint64_t srcSize = Ctx.getTypeSize(srcType);
-    //uint64_t dstSize = Ctx.getTypeSize(dstType);
-    //if (srcSize != dstSize)
-        //return ""; // must be same size
-
-    //std::string srcStr = getTagDeclName(srcType);
-    //std::string dstStr = getTagDeclName(dstType);
-
-    //if (srcStr.empty())
-        //srcStr = srcType.getAsString();
-    //if (dstStr.empty())
-        //dstStr = dstType.getAsString();
-
-    //std::string code;
-    //// new: void-returning function that writes to a pointer to dst
-    //code += "void " + funcName + "(" + srcStr + " x, " + dstStr + " *out) {\n";
-    //code += "    static_assert(sizeof(x) == sizeof(*out), \"Mismatched sizes\");\n";
-    //code += "    memcpy(out, &x, sizeof(*out));\n";
-    //code += "}\n";
-
-    //return code;
-//}
-
-// std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx)
-// { std::string funcName = generateFuncName(srcType, dstType, Ctx); if (funcName.empty()) return
-// "";
-
-// uint64_t srcSize = Ctx.getTypeSize(srcType);
-// uint64_t dstSize = Ctx.getTypeSize(dstType);
-// if (srcSize != dstSize)
-// return "";  // must be same size
-
-////std::string srcStr = Ctx.getTypeDeclType(srcType->getAsTagDecl()).getAsString();
-////std::string dstStr = Ctx.getTypeDeclType(dstType->getAsTagDecl()).getAsString();
-// std::string srcStr = getTagDeclName(srcType);
-// std::string dstStr = getTagDeclName(dstType);
-
-// if (srcStr.empty()) srcStr = srcType.getAsString();
-// if (dstStr.empty()) dstStr = dstType.getAsString();
-
-// std::string code;
-// code += dstStr + " " + funcName + "(" + srcStr + " x) {\n";
-// code += "    " + dstStr + " y;\n";
-// code += "    static_assert(sizeof(x) == sizeof(y), \"Mismatched sizes\");\n";
-// code += "    memcpy(&y, &x, sizeof(y));\n";
-// code += "    return y;\n";
-// code += "}\n";
-
-// return code;
-//}
-
-// std::string generateUnionConversionFunction(QualType srcType, QualType dstType, ASTContext &Ctx)
-// { std::string funcName = generateFuncName(srcType, dstType, Ctx); if (funcName.empty()) return
-// "";
-
-// uint64_t srcSize = Ctx.getTypeSize(srcType);
-// uint64_t dstSize = Ctx.getTypeSize(dstType);
-// if (srcSize != dstSize)
-// return "";
-
-// std::string srcC, dstC;
-// if (srcType->isFloatingType())
-// srcC = (srcSize == 32) ? "float" : "double";
-// else
-// srcC = (srcType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(srcSize) + "_t";
-
-// if (dstType->isFloatingType())
-// dstC = (dstSize == 32) ? "float" : "double";
-// else
-// dstC = (dstType->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(dstSize) + "_t";
-
-// std::string code;
-// code += dstC + " " + funcName + "(" + srcC + " x) {\n";
-// code += "    " + dstC + " y;\n";
-// code += "    memcpy(&y, &x, sizeof y);\n";
-// code += "    return y;\n";
-// code += "}\n";
-
-// return code;
-//}
 
 class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
   public:
@@ -536,8 +527,8 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
 
         std::string srcC = getTypeString(src_field->getType(), Ctx);
         std::string funcName = generateFuncName(src_field->getType(), dst_field->getType(), Ctx);
-        std::string funcCode =
-            generateUnionConversionFunction(src_field->getType(), dst_field->getType(), Ctx, UI.num_bytes);
+        std::string funcCode = generateUnionConversionFunction(
+            src_field->getType(), dst_field->getType(), Ctx, UI.num_bytes);
         if (funcName.empty() || funcCode.empty()) {
             if (VERBOSE)
                 llvm::outs() << "[Debug] Could not generate conversion function; skipping\n";
@@ -700,6 +691,11 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         std::string tmp_in_name = "__tenjin_tmp_in_" + VD->getNameAsString();
         std::string tmp_out_name = "__tenjin_tmp_out_" + VD->getNameAsString();
 
+        // === Generate typedefs for unnamed types ===
+        std::string typedefCode;
+        typedefCode += generateTypedefForUnnamedType(src_field->getType(), Ctx);
+        typedefCode += generateTypedefForUnnamedType(dst_field->getType(), Ctx);
+
         // === Remove union declaration ===
         const DeclStmt *declStmt = findEnclosingStmt<DeclStmt>(VD, Ctx);
         if (!declStmt)
@@ -709,7 +705,7 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         SourceLocation end = Lexer::getLocForEndOfToken(declStmt->getEndLoc(), 0, SM, LO);
         edits.push_back({SM.getFileOffset(start), start, end, ""});
 
-        // === First write: used for temp input assignment ===
+        // === First write ===
         auto firstSrcWriteIt =
             std::find_if(seq.begin(), seq.end(), [src_field](const AccessRec &a) {
                 return a.field == src_field && a.is_write;
@@ -735,7 +731,7 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         unsigned assignStartOff = SM.getFileOffset(assignStart);
         unsigned assignEndOff = SM.getFileOffset(assignEnd);
 
-        // === Last write: location to insert the output conversion ===
+        // === Last write ===
         auto lastSrcWriteIt =
             std::find_if(seq.rbegin(), seq.rend(), [src_field](const AccessRec &a) {
                 return a.field == src_field && a.is_write;
@@ -748,18 +744,13 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         if (!lastWriteStmt)
             return;
 
-        // SourceLocation insertAfterWrite =
-        // Lexer::getLocForEndOfToken(lastWriteStmt->getEndLoc(), 0, SM, LO);
-        // Step 1: Get end of the statement (after semicolon)
         SourceLocation afterStmtLoc =
             Lexer::getLocForEndOfToken(lastWriteStmt->getEndLoc(), 0, SM, LO);
 
-        // Step 2: Get line number of the statement
         unsigned lineNumber = SM.getSpellingLineNumber(afterStmtLoc);
         SourceLocation lineStartLoc =
             SM.translateLineCol(SM.getFileID(afterStmtLoc), lineNumber, 1);
 
-        // Step 3: Extract indentation from beginning of line
         llvm::StringRef lineText =
             Lexer::getSourceText(CharSourceRange::getCharRange(lineStartLoc, afterStmtLoc), SM, LO);
 
@@ -771,61 +762,36 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
                 break;
         }
 
-        // Step 4: Insert text with indentation
-        //std::string dstC = getTypeString(dst_field->getType(), Ctx);
-        //std::string dstC = getTagDeclName(dst_field->getType());
-        // std::string finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + " = " +
-        // funcName + "(" + tmp_in_name + ");";
-        // TheRewriter.InsertTextAfterToken(afterStmtLoc, finalInsert);
-        //  declare tmp_out, then call conversion that writes through pointer
-        //std::string finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + ";\n" +
-                                  //indentation + funcName + "(" + tmp_in_name + ", &" +
-                                  //tmp_out_name + ");";
         QualType dstQT = dst_field->getType();
         const clang::ArrayType *dstArr = Ctx.getAsArrayType(dstQT);
 
-        // Determine element type (if array) or full type (if not)
         clang::QualType elemDstQT = dstArr ? dstArr->getElementType() : dstQT;
-        std::string elemDstStr = getTagDeclName(elemDstQT);
+        std::string elemDstStr = getOrCreateTypedefName(elemDstQT, Ctx);
         if (elemDstStr.empty())
             elemDstStr = elemDstQT.getAsString();
 
-        // Original dstC (fallback for non-array)
-        std::string dstC = getTagDeclName(dst_field->getType());
+        std::string dstC = getOrCreateTypedefName(dst_field->getType(), Ctx);
         if (dstC.empty())
             dstC = dst_field->getType().getAsString();
 
-        // Build finalInsert depending on whether destination is an array
         std::string finalInsert;
         if (dstArr) {
-            // Prefer constant array size if available
-            if (const clang::ConstantArrayType *constArr = llvm::dyn_cast<clang::ConstantArrayType>(dstArr)) {
+            if (const clang::ConstantArrayType *constArr =
+                    llvm::dyn_cast<clang::ConstantArrayType>(dstArr)) {
                 uint64_t arraySize = constArr->getSize().getZExtValue();
-                finalInsert = "\n" + indentation + elemDstStr + " " + tmp_out_name + "[" + std::to_string(arraySize) + "];\n" +
-                              indentation + funcName + "(" + tmp_in_name + ", " + tmp_out_name + ");";
+                finalInsert = "\n" + indentation + elemDstStr + " " + tmp_out_name + "[" +
+                              std::to_string(arraySize) + "];\n" + indentation + funcName + "(" +
+                              tmp_in_name + ", " + tmp_out_name + ");";
             } else {
-                // Fallback for non-constant arrays: declare as pointer-to-element and pass pointer.
-                // This keeps generated C valid; caller may need to adjust if VLA/unknown size.
                 finalInsert = "\n" + indentation + elemDstStr + " *" + tmp_out_name + ";\n" +
-                              indentation + funcName + "(" + tmp_in_name + ", " + tmp_out_name + ");";
+                              indentation + funcName + "(" + tmp_in_name + ", " + tmp_out_name +
+                              ");";
             }
         } else {
-            // Non-array destination: keep previous behavior (declare value and pass &tmp)
-            finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + ";\n" +
-                          indentation + funcName + "(" + tmp_in_name + ", &" + tmp_out_name + ");";
+            finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + ";\n" + indentation +
+                          funcName + "(" + tmp_in_name + ", &" + tmp_out_name + ");";
         }
         TheRewriter.InsertTextAfterToken(afterStmtLoc, finalInsert);
-
-        // SourceLocation insertAfterWrite = Lexer::findLocationAfterToken(
-        // lastWriteStmt->getEndLoc(), tok::semi, SM, LO,
-        // [>SkipTrailingWhitespaceAndNewLine=<]true);
-
-        // edits.push_back({
-        // SM.getFileOffset(insertAfterWrite),
-        // insertAfterWrite,
-        // insertAfterWrite,
-        // dstC + " " + tmp_out_name + " = " + funcName + "(" + tmp_in_name + ");\n"
-        //});
 
         // === Replace member expressions ===
         for (const auto &a : seq) {
@@ -837,7 +803,6 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
 
             unsigned meOff = SM.getFileOffset(meStart);
 
-            // Skip member expressions that were inside the removed assignment
             if (meOff >= assignStartOff && meOff <= assignEndOff)
                 continue;
 
@@ -848,8 +813,9 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             }
         }
 
-        // === Insert conversion function above function definition ===
-        TheRewriter.InsertTextBefore(FD->getSourceRange().getBegin(), funcCode + "\n");
+        // === Insert typedefs and conversion function ===
+        TheRewriter.InsertTextBefore(FD->getSourceRange().getBegin(),
+                                     typedefCode + funcCode + "\n");
 
         // === Ensure #include <cstring> is present ===
         SourceLocation funcInsertLoc = FD->getSourceRange().getBegin();
