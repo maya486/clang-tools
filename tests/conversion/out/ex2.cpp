@@ -106,7 +106,9 @@ int test(uint32_t input) {
     //const struct caf_audio_description *desc = nullptr;
     //const struct caf_packet_table *pakt = nullptr;
     //const struct ima_block *blocks = nullptr;
-    
+    ima_u64_t __tenjin_tmp_in_conv64;
+ima_f64_t __tenjin_tmp_out_conv64;
+
     //ima_s64_t chunk_size;
     //unsigned chunk_type;
     //if (ima_btoh32(header->type) !=
@@ -150,9 +152,8 @@ int test(uint32_t input) {
     //info->frame_count = ima_btoh64(pakt->frame_count);
     //info->channel_count = ima_btoh32(desc->channels_per_frame);
     //conv64.u = desc->sample_rate;
-    uint64_t __tenjin_tmp_in_conv64 = input;
+    __tenjin_tmp_in_conv64 = input;
     __tenjin_tmp_in_conv64 = ima_btoh64(*(const ima_u64_t *)&__tenjin_tmp_in_conv64);
-    ima_f64_t __tenjin_tmp_out_conv64;
     tenjin_ima_u64_t_to_ima_f64_t(__tenjin_tmp_in_conv64, &__tenjin_tmp_out_conv64);
     //info->sample_rate = conv64.f;
     //return 0;

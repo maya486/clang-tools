@@ -7,10 +7,11 @@ void tenjin_float_to_uint32_t(float x, uint32_t *out) {
 }
 
 uint32_t test(float flt) {
-    
+    float __tenjin_tmp_in_in;
+uint32_t __tenjin_tmp_out_in;
+
     uint32_t n, j;
-    float __tenjin_tmp_in_in = flt;
-    uint32_t __tenjin_tmp_out_in;
+    __tenjin_tmp_in_in = flt;
     tenjin_float_to_uint32_t(__tenjin_tmp_in_in, &__tenjin_tmp_out_in);
     return __tenjin_tmp_out_in;
 }

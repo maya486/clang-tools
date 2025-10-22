@@ -1,4 +1,3 @@
-// fixed_rewriter.cpp
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -681,6 +680,34 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             return (T->isUnsignedIntegerType() ? "uint" : "int") + std::to_string(size) + "_t";
     }
 
+    std::string generateTmpDeclaration(const std::string tmp_name, QualType qual_type,
+                                       ASTContext &Ctx) {
+        std::string type_name = getOrCreateTypedefName(qual_type, Ctx);
+
+        const clang::ArrayType *maybe_array = Ctx.getAsArrayType(qual_type);
+
+        clang::QualType elem_type = maybe_array ? maybe_array->getElementType() : qual_type;
+        std::string elem_type_str = getOrCreateTypedefName(elem_type, Ctx);
+        if (elem_type_str.empty())
+            elem_type_str = elem_type.getAsString();
+
+        // if (dstC.empty())
+        // dstC = qual_type.getAsString();
+
+        std::string dst_decl;
+        if (maybe_array) {
+            if (const clang::ConstantArrayType *constArr =
+                    llvm::dyn_cast<clang::ConstantArrayType>(maybe_array)) {
+                uint64_t arraySize = constArr->getSize().getZExtValue();
+                return elem_type_str + " " + tmp_name + "[" + std::to_string(arraySize) + "];\n";
+            } else {
+                return elem_type_str + " *" + tmp_name + "\n";
+            }
+        } else {
+            return type_name + " " + tmp_name + ";\n";
+        }
+    }
+
     void applyEdits(const FunctionDecl *FD, const VarDecl *VD, const std::vector<AccessRec> &seq,
                     const FieldDecl *src_field, const FieldDecl *dst_field, const std::string &srcC,
                     const std::string &funcName, const std::string &funcCode, ASTContext &Ctx) {
@@ -688,50 +715,35 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
         LangOptions LO = Ctx.getLangOpts();
         std::vector<Edit> edits;
 
+        // new tmp in and out conversion variables
         std::string tmp_in_name = "__tenjin_tmp_in_" + VD->getNameAsString();
         std::string tmp_out_name = "__tenjin_tmp_out_" + VD->getNameAsString();
 
-        // === Generate typedefs for unnamed types ===
+
+        // generate typedefs for unnamed types (e.g. unnamed union)
         std::string typedefCode;
         typedefCode += generateTypedefForUnnamedType(src_field->getType(), Ctx);
         typedefCode += generateTypedefForUnnamedType(dst_field->getType(), Ctx);
 
-        // === Remove union declaration ===
+        // generate declarations of tmp in and out conversion variables
         const DeclStmt *declStmt = findEnclosingStmt<DeclStmt>(VD, Ctx);
         if (!declStmt)
             return;
 
         SourceLocation start = declStmt->getBeginLoc();
         SourceLocation end = Lexer::getLocForEndOfToken(declStmt->getEndLoc(), 0, SM, LO);
-        edits.push_back({SM.getFileOffset(start), start, end, ""});
 
-        // === First write ===
-        auto firstSrcWriteIt =
-            std::find_if(seq.begin(), seq.end(), [src_field](const AccessRec &a) {
-                return a.field == src_field && a.is_write;
-            });
-        if (firstSrcWriteIt == seq.end())
-            return;
-        const AccessRec &firstSrcWrite = *firstSrcWriteIt;
+        std::string srcTypeStr = getOrCreateTypedefName(src_field->getType(), Ctx);
+        if (srcTypeStr.empty())
+            srcTypeStr = src_field->getType().getAsString();
 
-        const BinaryOperator *firstAssign =
-            findEnclosingStmt<BinaryOperator>(firstSrcWrite.expr, Ctx);
-        if (!firstAssign)
-            return;
+        std::string src_and_dst_tmp_decls =
+            generateTmpDeclaration(tmp_in_name, src_field->getType(), Ctx) + 
+            generateTmpDeclaration(tmp_out_name, dst_field->getType(), Ctx);
 
-        SourceLocation assignStart = firstAssign->getBeginLoc();
-        SourceLocation assignEnd = Lexer::getLocForEndOfToken(firstAssign->getEndLoc(), 0, SM, LO);
-        const Expr *rhs = firstAssign->getRHS()->IgnoreParenImpCasts();
-        std::string rhsText =
-            Lexer::getSourceText(CharSourceRange::getTokenRange(rhs->getSourceRange()), SM, LO)
-                .str();
-        edits.push_back({SM.getFileOffset(assignStart), assignStart, assignEnd,
-                         srcC + " " + tmp_in_name + " = " + rhsText});
+        edits.push_back({SM.getFileOffset(start), start, end, src_and_dst_tmp_decls});
 
-        unsigned assignStartOff = SM.getFileOffset(assignStart);
-        unsigned assignEndOff = SM.getFileOffset(assignEnd);
-
-        // === Last write ===
+        // identify last write (before read of converted union val) to know where to put func call
         auto lastSrcWriteIt =
             std::find_if(seq.rbegin(), seq.rend(), [src_field](const AccessRec &a) {
                 return a.field == src_field && a.is_write;
@@ -740,20 +752,30 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             return;
         const AccessRec &lastSrcWrite = *lastSrcWriteIt;
 
-        const Stmt *lastWriteStmt = findEnclosingStmt<Stmt>(lastSrcWrite.expr, Ctx);
+        const Expr *exprToFind = lastSrcWrite.expr;
+        const ArraySubscriptExpr *ASE =
+            findEnclosingStmt<ArraySubscriptExpr>(lastSrcWrite.expr, Ctx);
+        if (ASE) {
+            const Expr *base = ASE->getBase()->IgnoreParenImpCasts();
+            if (base == lastSrcWrite.expr) {
+                exprToFind = ASE;
+            }
+        }
+
+        const Stmt *lastWriteStmt = findEnclosingStmt<Stmt>(exprToFind, Ctx);
         if (!lastWriteStmt)
             return;
 
-        SourceLocation afterStmtLoc =
+        SourceLocation after_last_write_end =
             Lexer::getLocForEndOfToken(lastWriteStmt->getEndLoc(), 0, SM, LO);
 
-        unsigned lineNumber = SM.getSpellingLineNumber(afterStmtLoc);
-        SourceLocation lineStartLoc =
-            SM.translateLineCol(SM.getFileID(afterStmtLoc), lineNumber, 1);
 
+        // find indentation (for formatting generated code purposes)
+        unsigned after_last_write_line_number = SM.getSpellingLineNumber(after_last_write_end);
+        SourceLocation after_last_write_start =
+            SM.translateLineCol(SM.getFileID(after_last_write_end), after_last_write_line_number, 1);
         llvm::StringRef lineText =
-            Lexer::getSourceText(CharSourceRange::getCharRange(lineStartLoc, afterStmtLoc), SM, LO);
-
+            Lexer::getSourceText(CharSourceRange::getCharRange(after_last_write_start, after_last_write_end), SM, LO);
         std::string indentation;
         for (char c : lineText) {
             if (c == ' ' || c == '\t')
@@ -762,49 +784,42 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
                 break;
         }
 
-        QualType dstQT = dst_field->getType();
-        const clang::ArrayType *dstArr = Ctx.getAsArrayType(dstQT);
-
-        clang::QualType elemDstQT = dstArr ? dstArr->getElementType() : dstQT;
-        std::string elemDstStr = getOrCreateTypedefName(elemDstQT, Ctx);
-        if (elemDstStr.empty())
-            elemDstStr = elemDstQT.getAsString();
-
-        std::string dstC = getOrCreateTypedefName(dst_field->getType(), Ctx);
-        if (dstC.empty())
-            dstC = dst_field->getType().getAsString();
-
-        std::string finalInsert;
-        if (dstArr) {
-            if (const clang::ConstantArrayType *constArr =
-                    llvm::dyn_cast<clang::ConstantArrayType>(dstArr)) {
-                uint64_t arraySize = constArr->getSize().getZExtValue();
-                finalInsert = "\n" + indentation + elemDstStr + " " + tmp_out_name + "[" +
-                              std::to_string(arraySize) + "];\n" + indentation + funcName + "(" +
-                              tmp_in_name + ", " + tmp_out_name + ");";
-            } else {
-                finalInsert = "\n" + indentation + elemDstStr + " *" + tmp_out_name + ";\n" +
-                              indentation + funcName + "(" + tmp_in_name + ", " + tmp_out_name +
-                              ");";
-            }
+        // insert conversion func call after last write with correct indentation
+        std::string conversion_func_call;
+        const clang::ArrayType *maybe_array = Ctx.getAsArrayType(dst_field->getType());
+        if (maybe_array) {
+            conversion_func_call =
+                "\n" + indentation + funcName + "(" + tmp_in_name + ", " + tmp_out_name + ");";
         } else {
-            finalInsert = "\n" + indentation + dstC + " " + tmp_out_name + ";\n" + indentation +
-                          funcName + "(" + tmp_in_name + ", &" + tmp_out_name + ");";
+            conversion_func_call =
+                "\n" + indentation + funcName + "(" + tmp_in_name + ", &" + tmp_out_name + ");";
         }
-        TheRewriter.InsertTextAfterToken(afterStmtLoc, finalInsert);
+        TheRewriter.InsertTextAfterToken(after_last_write_end, conversion_func_call);
 
-        // === Replace member expressions ===
+        // replace all read and write member expressions of the union
         for (const auto &a : seq) {
+            const ArraySubscriptExpr *ASE = findEnclosingStmt<ArraySubscriptExpr>(a.expr, Ctx);
+            bool isArrayBase = false;
+            if (ASE) {
+                const Expr *base = ASE->getBase()->IgnoreParenImpCasts();
+                if (base == a.expr) {
+                    isArrayBase = true;
+                }
+            }
+
             SourceLocation meStart = a.expr->getSourceRange().getBegin();
-            SourceLocation meEnd =
-                Lexer::getLocForEndOfToken(a.expr->getSourceRange().getEnd(), 0, SM, LO);
+            SourceLocation meEnd;
+            if (isArrayBase) {
+                // For array subscripts, only replace up to the member expression itself (u.b)
+                // not including the [index] part
+                meEnd = Lexer::getLocForEndOfToken(a.expr->getMemberLoc(), 0, SM, LO);
+            } else {
+                meEnd = Lexer::getLocForEndOfToken(a.expr->getSourceRange().getEnd(), 0, SM, LO);
+            }
             if (!meStart.isValid() || !meEnd.isValid())
                 continue;
 
             unsigned meOff = SM.getFileOffset(meStart);
-
-            if (meOff >= assignStartOff && meOff <= assignEndOff)
-                continue;
 
             if (a.field == src_field) {
                 edits.push_back({meOff, meStart, meEnd, tmp_in_name});
@@ -813,11 +828,11 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             }
         }
 
-        // === Insert typedefs and conversion function ===
+        // Insert typedefs and conversion function
         TheRewriter.InsertTextBefore(FD->getSourceRange().getBegin(),
                                      typedefCode + funcCode + "\n");
 
-        // === Ensure #include <cstring> is present ===
+        // Ensure #include <cstring> is present 
         SourceLocation funcInsertLoc = FD->getSourceRange().getBegin();
         FileID FID = SM.getFileID(funcInsertLoc);
         const FileEntry *FE = SM.getFileEntryForID(FID);
@@ -829,7 +844,7 @@ class FunctionAccessAnalyzer : public MatchFinder::MatchCallback {
             }
         }
 
-        // === Apply all edits in reverse order ===
+        // Apply all edits in reverse order 
         std::sort(edits.begin(), edits.end(),
                   [](const Edit &A, const Edit &B) { return A.offset > B.offset; });
         for (const auto &e : edits)

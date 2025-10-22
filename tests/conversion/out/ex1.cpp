@@ -372,10 +372,11 @@ void tenjin_uint32_t_to_float(uint32_t x, float *out) {
 }
 
 float test(uint16_t h) {
-    
+    uint32_t __tenjin_tmp_in_out;
+float __tenjin_tmp_out_out;
+
     int n = h >> 10;
-    uint32_t __tenjin_tmp_in_out = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n];
-    float __tenjin_tmp_out_out;
+    __tenjin_tmp_in_out = m__mantissa[(h & 0x3ff) + m__offset[n]] + m__exponent[n];
     tenjin_uint32_t_to_float(__tenjin_tmp_in_out, &__tenjin_tmp_out_out);
     return __tenjin_tmp_out_out;
 }

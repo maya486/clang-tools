@@ -11,12 +11,13 @@ void tenjin_char_to_T(char *x, T *out) {
 T test(char c) {
     T x = 300000;
     if (sizeof(T) > 1) {
-        
-        int64_t __tenjin_tmp_in_u = c;
+        char __tenjin_tmp_in_u[8];
+T __tenjin_tmp_out_u;
+
+        __tenjin_tmp_in_u[0] = c;
         __tenjin_tmp_in_u[1] = c+1;
-        __tenjin_tmp_in_u[
-        T __tenjin_tmp_out_u;
-        tenjin_char_to_T(__tenjin_tmp_in_u, &__tenjin_tmp_out_u);3] = c-3;
+        __tenjin_tmp_in_u[3] = c-3;
+        tenjin_char_to_T(__tenjin_tmp_in_u, &__tenjin_tmp_out_u);
         x = __tenjin_tmp_out_u;
         return x+3;
     }

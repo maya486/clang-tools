@@ -5,17 +5,18 @@
 typedef struct {
     uint32_t __l;
     uint32_t __h;
-} tenjin_struct_94244295843248;
-void tenjin_uint64_t_to_tenjin_struct_94244295843248(uint64_t x, tenjin_struct_94244295843248 *out) {
+} tenjin_struct_94825943349392;
+void tenjin_uint64_t_to_tenjin_struct_94825943349392(uint64_t x, tenjin_struct_94825943349392 *out) {
     memcpy(out, &x, 8);
 }
 
 uint32_t test(uint64_t n) {
     n <<= 25;
-    
-    uint64_t __tenjin_tmp_in___x = n;
-    tenjin_struct_94244295843248 __tenjin_tmp_out___x;
-    tenjin_uint64_t_to_tenjin_struct_94244295843248(__tenjin_tmp_in___x, &__tenjin_tmp_out___x);
+    uint64_t __tenjin_tmp_in___x;
+tenjin_struct_94825943349392 __tenjin_tmp_out___x;
+
+    __tenjin_tmp_in___x = n;
+    tenjin_uint64_t_to_tenjin_struct_94825943349392(__tenjin_tmp_in___x, &__tenjin_tmp_out___x);
     return __tenjin_tmp_out___x.__h  * __tenjin_tmp_out___x.__l;
 }
 

@@ -11,9 +11,10 @@ void tenjin_T_to_char(T x, char *out) {
 T test(int c) {
     T x = 300000*c;
     if (sizeof(T) > 1) {
-        
-        int64_t __tenjin_tmp_in_u = x;
-        char __tenjin_tmp_out_u[8];
+        T __tenjin_tmp_in_u;
+char __tenjin_tmp_out_u[8];
+
+        __tenjin_tmp_in_u = x;
         tenjin_T_to_char(__tenjin_tmp_in_u, __tenjin_tmp_out_u);
         return __tenjin_tmp_out_u[0]+__tenjin_tmp_out_u[1]+__tenjin_tmp_out_u[2];
     }
